@@ -31,7 +31,7 @@ if exist "nook.ico" set BASE=%BASE% /win32icon:nook.ico
 
 rem --- Full variant with the Windows media API (cover art, progress) ------
 set "WM=%WINDIR%\System32\WinMetadata"
-set WRT=/define:WINRT /r:"%WM%\Windows.Foundation.winmd" /r:"%WM%\Windows.Media.winmd" /r:"%WM%\Windows.Storage.winmd"
+set WRT=/define:WINRT /r:"%WM%\Windows.Foundation.winmd" /r:"%WM%\Windows.Media.winmd" /r:"%WM%\Windows.Storage.winmd" /r:"%WM%\Windows.Devices.winmd" /r:"%WM%\Windows.Networking.winmd"
 for %%F in (System.Runtime.dll System.Runtime.InteropServices.WindowsRuntime.dll System.Threading.Tasks.dll System.IO.dll) do (
   if exist "%FW%\%%F" set WRT=!WRT! /r:"%FW%\%%F"
 )
