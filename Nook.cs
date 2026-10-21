@@ -4996,6 +4996,7 @@ namespace Nook
             audio.ChevronClick += OpenAudio;
             night.Click += ToggleNightLight;
             night.ChevronClick += OpenNightLight;
+            night.IconClick += ToggleNightLight;
             dark.Click += ToggleDark;
             mic.Click += ToggleMic;
             var all = new Dictionary<string, KeyValuePair<Tile, Action>>
@@ -9178,182 +9179,235 @@ namespace Nook
     // =================================================================
     public static class NightLight
     {
-        static bool isEnabled;
-        static double currentWarmth = 0.65;
-        static bool hasOriginalRamp;
-        static RAMP originalRamp;
+        const string StateKeyPath = @"Software\Microsoft\Windows\CurrentVersion\CloudStore\Store\DefaultAccount\Current\default$windows.data.bluelightreduction.bluelightreductionstate\windows.data.bluelightreduction.bluelightreductionstate";
+        const string SettingsKeyPath = @"Software\Microsoft\Windows\CurrentVersion\CloudStore\Store\DefaultAccount\Current\default$windows.data.bluelightreduction.settings\windows.data.bluelightreduction.settings";
 
-        [DllImport("gdi32.dll")]
-        static extern bool GetDeviceGammaRamp(IntPtr hDC, ref RAMP lpRamp);
+        static ulong lastStateTimestamp = 0;
+        static DateTime lastWarmthWrite = DateTime.MinValue;
 
-        [DllImport("gdi32.dll")]
-        static extern bool SetDeviceGammaRamp(IntPtr hDC, ref RAMP lpRamp);
-
-        [DllImport("user32.dll")]
-        static extern IntPtr GetDC(IntPtr hWnd);
-
-        [DllImport("user32.dll")]
-        static extern int ReleaseDC(IntPtr hWnd, IntPtr hDC);
-
-        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
-        public struct RAMP
+        static void WriteVarint(List<byte> buf, ulong val)
         {
-            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 256)]
-            public ushort[] Red;
-            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 256)]
-            public ushort[] Green;
-            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 256)]
-            public ushort[] Blue;
+            while (true)
+            {
+                byte b = (byte)(val & 0x7F);
+                val >>= 7;
+                if (val == 0) { buf.Add(b); break; }
+                buf.Add((byte)(b | 0x80));
+            }
+        }
+
+        public static byte[] BuildStateBytes(bool active)
+        {
+            // 1. Build payload
+            var payload = new List<byte>();
+            payload.AddRange(new byte[] { 0x43, 0x42, 0x01, 0x00 }); // CompactBinary marshaled header
+            if (active)
+            {
+                payload.AddRange(new byte[] { 0x10, 0x00 }); // field 0 (STATUS = 0, running)
+            }
+            payload.AddRange(new byte[] { 0xD0, 0x0A, 0x02 }); // field 10 (TRANSITION_CAUSE = 1 manual)
+            payload.AddRange(new byte[] { 0xC6, 0x14 }); // field 20 (LAST_TRANSITION)
+            ulong filetime = (ulong)DateTime.UtcNow.ToFileTime();
+            WriteVarint(payload, filetime);
+            payload.Add(0x00); // end of inner struct
+
+            // 2. Build outer envelope
+            var env = new List<byte>();
+            env.AddRange(new byte[] { 0x43, 0x42, 0x01, 0x00 }); // outer marshaled header
+            env.AddRange(new byte[] { 0x0A, 0x02, 0x01, 0x00 }); // outer field 1 (struct)
+            env.Add(0x2A); // container struct start
+            env.Add(0x06); // CONTAINER_MODIFIED (field 0 uint64)
+            ulong unixSecs = (ulong)(DateTime.UtcNow.Subtract(new DateTime(1970, 1, 1))).TotalSeconds;
+            if (unixSecs <= lastStateTimestamp) unixSecs = lastStateTimestamp + 1;
+            lastStateTimestamp = unixSecs;
+            WriteVarint(env, unixSecs);
+            env.Add(0x2A); // CONTAINER_WRAPPER (field 1 struct)
+            env.AddRange(new byte[] { 0x2B, 0x0E }); // WRAPPER_PAYLOAD (field 1 list of int8)
+            env.Add((byte)payload.Count);
+            env.AddRange(payload);
+            env.AddRange(new byte[] { 0x00, 0x00, 0x00 }); // end structs: wrapper, container, outer
+
+            return env.ToArray();
         }
 
         public static bool IsEnabled()
         {
-            if (isEnabled) return true;
             try
             {
-                const string key = @"Software\Microsoft\Windows\CurrentVersion\CloudStore\Store\DefaultAccount\Current\default$windows.data.bluelightreduction.settings\windows.data.bluelightreduction.settings";
-                using (var k = Registry.CurrentUser.OpenSubKey(key))
+                using (var k = Registry.CurrentUser.OpenSubKey(StateKeyPath))
                 {
-                    var data = k != null ? k.GetValue("Data") as byte[] : null;
-                    if (data != null && data.Length > 18)
-                        return data[18] == 0x15;
-                }
-            }
-            catch { }
-            return isEnabled;
-        }
-
-        public static double GetWarmth() { return currentWarmth; }
-
-        public static void SetWarmth(double w)
-        {
-            currentWarmth = Math.Max(0.1, Math.Min(1.0, w));
-            if (isEnabled) ApplyRamp(true, currentWarmth);
-        }
-
-        public static void SetEnabled(bool enabled, double? warmth = null)
-        {
-            if (warmth.HasValue) currentWarmth = Math.Max(0.1, Math.Min(1.0, warmth.Value));
-            isEnabled = enabled;
-            ApplyRamp(enabled, currentWarmth);
-            SyncCloudStore(enabled);
-        }
-
-        static void ApplyRamp(bool on, double warmth)
-        {
-            try
-            {
-                IntPtr hdc = GetDC(IntPtr.Zero);
-                if (hdc == IntPtr.Zero) return;
-                try
-                {
-                    if (!hasOriginalRamp)
+                    if (k != null)
                     {
-                        originalRamp = new RAMP();
-                        if (GetDeviceGammaRamp(hdc, ref originalRamp))
-                            hasOriginalRamp = true;
-                    }
-
-                    if (on)
-                    {
-                        RAMP warm = new RAMP
+                        var data = k.GetValue("Data") as byte[];
+                        if (data != null && data.Length >= 23)
                         {
-                            Red = new ushort[256],
-                            Green = new ushort[256],
-                            Blue = new ushort[256]
-                        };
-                        double gFactor = 1.0 - (1.0 - 0.88) * warmth;
-                        double bFactor = 1.0 - (1.0 - 0.52) * warmth;
-                        for (int i = 0; i < 256; i++)
-                        {
-                            warm.Red[i] = (ushort)(i * 256);
-                            warm.Green[i] = (ushort)(i * 256 * gFactor);
-                            warm.Blue[i] = (ushort)(i * 256 * bFactor);
-                        }
-                        SetDeviceGammaRamp(hdc, ref warm);
-                    }
-                    else if (hasOriginalRamp)
-                    {
-                        SetDeviceGammaRamp(hdc, ref originalRamp);
-                    }
-                    else
-                    {
-                        RAMP def = new RAMP
-                        {
-                            Red = new ushort[256],
-                            Green = new ushort[256],
-                            Blue = new ushort[256]
-                        };
-                        for (int i = 0; i < 256; i++)
-                        {
-                            ushort val = (ushort)(i * 256);
-                            def.Red[i] = val;
-                            def.Green[i] = val;
-                            def.Blue[i] = val;
-                        }
-                        SetDeviceGammaRamp(hdc, ref def);
-                    }
-                }
-                finally
-                {
-                    ReleaseDC(IntPtr.Zero, hdc);
-                }
-            }
-            catch { }
-        }
-
-        static void SyncCloudStore(bool enabled)
-        {
-            ThreadPool.QueueUserWorkItem(_ =>
-            {
-                try
-                {
-                    const string keyPath = @"Software\Microsoft\Windows\CurrentVersion\CloudStore\Store\DefaultAccount\Current\default$windows.data.bluelightreduction.bluelightreductionstate\windows.data.bluelightreduction.bluelightreductionstate";
-                    using (var k = Registry.CurrentUser.OpenSubKey(keyPath, true))
-                    {
-                        if (k != null)
-                        {
-                            var data = k.GetValue("Data") as byte[];
-                            if (data != null && data.Length >= 22)
+                            // Search for inner payload header (43 42 01 00)
+                            for (int i = 4; i <= data.Length - 5; i++)
                             {
-                                byte[] newData;
-                                if (enabled)
+                                if (data[i] == 0x43 && data[i + 1] == 0x42 && data[i + 2] == 0x01 && data[i + 3] == 0x00)
                                 {
-                                    newData = new byte[43];
-                                    Array.Copy(data, 0, newData, 0, Math.Min(22, data.Length));
-                                    if (data.Length >= 25) Array.Copy(data, 23, newData, 25, Math.Min(18, data.Length - 23));
-                                    newData[18] = 0x15;
-                                    newData[23] = 0x10;
-                                    newData[24] = 0x00;
+                                    return data[i + 4] == 0x10;
                                 }
-                                else
-                                {
-                                    newData = new byte[41];
-                                    Array.Copy(data, 0, newData, 0, Math.Min(22, data.Length));
-                                    if (data.Length >= 25) Array.Copy(data, 25, newData, 23, Math.Min(18, data.Length - 25));
-                                    newData[18] = 0x13;
-                                }
-                                for (int i = 10; i < 15 && i < newData.Length; i++)
-                                {
-                                    if (newData[i] != 0xFF) { newData[i]++; break; }
-                                }
-                                k.SetValue("Data", newData, RegistryValueKind.Binary);
                             }
                         }
                     }
                 }
-                catch { }
-            });
+            }
+            catch (Exception ex)
+            {
+                NookApp.Log(ex);
+            }
+            return false;
+        }
+
+        public static void SetEnabled(bool enabled)
+        {
+            try
+            {
+                byte[] bytes = BuildStateBytes(enabled);
+                using (var k = Registry.CurrentUser.CreateSubKey(StateKeyPath))
+                {
+                    if (k != null)
+                    {
+                        k.SetValue("Data", bytes, RegistryValueKind.Binary);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                NookApp.Log(ex);
+            }
+        }
+
+        public static double GetWarmth()
+        {
+            try
+            {
+                using (var k = Registry.CurrentUser.OpenSubKey(SettingsKeyPath))
+                {
+                    if (k != null)
+                    {
+                        var data = k.GetValue("Data") as byte[];
+                        if (data != null && data.Length >= 25)
+                        {
+                            for (int i = 0; i < data.Length - 3; i++)
+                            {
+                                if (data[i] == 0xCF && data[i + 1] == 0x28)
+                                {
+                                    int b1 = data[i + 2];
+                                    int b2 = data[i + 3];
+                                    int raw = (b1 & 0x7F) | ((b2 & 0x7F) << 7);
+                                    int kelvin = raw / 2;
+                                    if (kelvin >= 1200 && kelvin <= 6500)
+                                    {
+                                        double warmth = (6500.0 - kelvin) / 5300.0;
+                                        return Math.Max(0.0, Math.Min(1.0, warmth));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                NookApp.Log(ex);
+            }
+            return 0.58; // default ~3400K
+        }
+
+        public static void SetWarmth(double warmth, bool force = false)
+        {
+            try
+            {
+                if (!force && (DateTime.UtcNow - lastWarmthWrite).TotalMilliseconds < 80) return;
+                lastWarmthWrite = DateTime.UtcNow;
+
+                warmth = Math.Max(0.0, Math.Min(1.0, warmth));
+                int kelvin = (int)Math.Round(6500.0 - warmth * 5300.0);
+                kelvin = Math.Max(1200, Math.Min(6500, kelvin));
+
+                using (var k = Registry.CurrentUser.OpenSubKey(SettingsKeyPath, true))
+                {
+                    if (k == null) return;
+                    byte[] data = k.GetValue("Data") as byte[];
+                    if (data == null || data.Length < 25) return;
+
+                    // Locate field 40 (0xCF 0x28)
+                    int tempPos = -1;
+                    for (int i = 0; i < data.Length - 3; i++)
+                    {
+                        if (data[i] == 0xCF && data[i + 1] == 0x28)
+                        {
+                            tempPos = i;
+                            break;
+                        }
+                    }
+
+                    int val = kelvin * 2;
+                    byte v1 = (byte)((val & 0x7F) | 0x80);
+                    byte v2 = (byte)((val >> 7) & 0x7F);
+
+                    byte[] outData;
+                    if (tempPos != -1)
+                    {
+                        outData = (byte[])data.Clone();
+                        outData[tempPos + 2] = v1;
+                        outData[tempPos + 3] = v2;
+                    }
+                    else
+                    {
+                        int insertPos = -1;
+                        for (int i = 0; i < data.Length - 2; i++)
+                        {
+                            if (data[i] == 0xCA && data[i + 1] == 0x32)
+                            {
+                                insertPos = i;
+                                break;
+                            }
+                        }
+                        if (insertPos == -1) insertPos = data.Length - 4;
+
+                        var list = new List<byte>(data);
+                        list.InsertRange(insertPos, new byte[] { 0xCF, 0x28, v1, v2 });
+                        for (int i = 0; i < 25 && i < list.Count - 2; i++)
+                        {
+                            if (list[i] == 0x2B && list[i + 1] == 0x0E)
+                            {
+                                list[i + 2] = (byte)(list[i + 2] + 4);
+                                break;
+                            }
+                        }
+                        outData = list.ToArray();
+                    }
+
+                    // Update container modified timestamp (offset 10..14)
+                    ulong unixSecs = (ulong)(DateTime.UtcNow.Subtract(new DateTime(1970, 1, 1))).TotalSeconds;
+                    int tsPos = 10;
+                    ulong cur = unixSecs;
+                    while (cur > 0 && tsPos < outData.Length)
+                    {
+                        byte b = (byte)(cur & 0x7F);
+                        cur >>= 7;
+                        if (cur != 0) b |= 0x80;
+                        outData[tsPos++] = b;
+                        if (cur == 0) break;
+                    }
+
+                    k.SetValue("Data", outData, RegistryValueKind.Binary);
+                }
+            }
+            catch (Exception ex)
+            {
+                NookApp.Log(ex);
+            }
         }
 
         public static void RestoreGammaOnExit()
         {
-            if (isEnabled) ApplyRamp(false, 0);
         }
     }
 
-    // =================================================================
-    //  WLAN / Wi-Fi Manager
     // =================================================================
     public static class WifiManager
     {
@@ -10252,7 +10306,7 @@ namespace Nook
             seek.Seeked += v =>
             {
                 pct.Text = Math.Round(v * 100) + " %";
-                NightLight.SetWarmth(v);
+                NightLight.SetWarmth(v, true);
                 if (!isNlOn)
                 {
                     NightLight.SetEnabled(true);
