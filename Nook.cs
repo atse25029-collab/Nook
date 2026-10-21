@@ -182,9 +182,9 @@ namespace Nook
               ""surface"": ""#161618"", ""surface2"": ""#232326"", ""text"": ""#F2F2F0"", ""muted"": ""#8E8E93"",
               ""pillBackground"": ""#0B0B0C"", ""border"": """", ""opacity"": 0.98,
               ""cardStyle"": ""filled"", ""cardRadius"": 18, ""font"": ""Segoe UI Variable Display"", ""scale"": ""auto"" },
-  ""tabs"": [ ""controls"", ""today"", ""apps"", ""taskbar"", ""clipboard"", ""power"" ],
+  ""tabs"": [ ""controls"", ""hardware"", ""today"", ""apps"", ""taskbar"", ""clipboard"", ""power"" ],
   ""behavior"": { ""winKey"": true, ""winTab"": ""same"", ""hotkey"": """", ""typeToSearch"": ""apps"", ""hideWindowsTaskbar"": true, ""autostart"": false },
-  ""controls"": { ""tiles"": [ ""wifi"", ""bluetooth"", ""audio"", ""night"", ""dark"", ""mic"" ], ""showVolume"": true, ""showMedia"": true },
+  ""controls"": { ""tiles"": [ ""wifi"", ""bluetooth"", ""audio"", ""night"", ""dark"", ""mic"", ""saver"" ], ""showVolume"": true, ""showBrightness"": true, ""showMedia"": true },
   ""today"": { ""showWeather"": true, ""showTimer"": true, ""showTodos"": true, ""weatherCity"": """", ""weatherUnit"": ""C"", ""timerPresets"": [ 1, 5, 10, 15, 20 ] },
   ""apps"": { ""showFavorites"": true, ""recentCount"": 5, ""compact"": false, ""showKind"": true,
              ""quickLinks"": [ { ""name"": ""Gmail"", ""target"": ""https://mail.google.com"" } ],
@@ -305,6 +305,40 @@ namespace Nook
 
         static readonly Dictionary<string, string> Map = new Dictionary<string, string>
         {
+            { "Hardware", "Hardware" },
+            { "Netzwerk", "Network" },
+            { "Keine aktive Verbindung", "No active connection" },
+            { "Grafikkarte aktiv", "Graphics active" },
+            { "zugewiesen", "committed" },
+            { "Gesamt:", "Total:" },
+            { "Helligkeit", "Brightness" },
+            { "Stromsparmodus", "Battery saver" },
+            { "Helligkeit ", "Brightness " },
+            { "Helligkeits-Regler", "Brightness slider" },
+            { "Akku", "Battery" },
+            { "Akku & Energie", "Battery & Power" },
+            { "Akku anzeigen", "Show battery" },
+            { "Prozent und Ladezustand in der Pille", "Percentage and charging status in the pill" },
+            { "Netzbetrieb (Wird geladen)", "Plugged in (Charging)" },
+            { "Akkubetrieb", "On battery" },
+            { "Netzbetrieb", "Plugged in" },
+            { "Netzbetrieb (Voll geladen)", "Plugged in (Fully charged)" },
+            { "Arbeitsspeicher", "Memory" },
+            { "Speicher", "Storage" },
+            { "Laufwerke", "Drives" },
+            { "Grafikkarte", "Graphics (GPU)" },
+            { "Prozessor", "Processor" },
+            { "Kerne", "Cores" },
+            { "Geschwindigkeit", "Speed" },
+            { "Prozesse", "Processes" },
+            { "Threads", "Threads" },
+            { "Betriebszeit", "Uptime" },
+            { "Verfügbar", "Available" },
+            { "Belegt", "Used" },
+            { "ca. 0 Std. 1 Min.", "approx. 0 hr 1 min" },
+            { "ca. 0 Min.", "approx. 0 min" },
+            { "Kein Akku", "No battery" },
+            { "frei von", "free of" },
             { "WLAN", "Wi-Fi" },
             { "WLAN-Einstellungen", "Wi-Fi settings" },
             { "Bluetooth-Einstellungen", "Bluetooth settings" },
@@ -3440,6 +3474,8 @@ namespace Nook
         StackPanel textItems;
         bool winFirst;
         readonly Btn micBtn;
+        readonly StackPanel batterySp;
+        readonly TextBlock battIcon, battTx;
         const double M = 18;
         readonly double h;
         string flashText;
@@ -3503,10 +3539,22 @@ namespace Nook
             micBtn.ToolTip = Loc.Tr("Mikrofon stumm – klicken zum Einschalten");
             micBtn.Click += () => { Audio.SetMicMuted(false); app.MicMuted = false; Refresh(); };
             micBtn.MouseLeftButtonDown += (s, e) => e.Handled = true;
+            batterySp = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center, Cursor = Cursors.Hand };
+            battIcon = U.I("\uEBA8", fs, Th.Text);
+            battTx = U.T("", fs, Th.Muted); battTx.Margin = new Thickness(4, 0, 0, 0);
+            batterySp.Children.Add(battIcon); batterySp.Children.Add(battTx);
+            batterySp.MouseLeftButtonDown += (s, e) =>
+            {
+                e.Handled = true;
+                bool next = !BatteryManager.IsBatterySaver();
+                BatteryManager.SetBatterySaver(next);
+                Flash(Loc.Tr("Stromsparmodus") + ": " + (next ? Loc.Tr("An") : Loc.Tr("Aus")), 1.5, false);
+                Refresh();
+            };
             // Inhalte in der eingestellten Reihenfolge
-            var pItems = new Dictionary<string, UIElement> { { "mic", micBtn }, { "clock", clock }, { "date", date }, { "timer", timerSp }, { "media", mediaSp } };
+            var pItems = new Dictionary<string, UIElement> { { "mic", micBtn }, { "clock", clock }, { "date", date }, { "battery", batterySp }, { "timer", timerSp }, { "media", mediaSp } };
             var pOrder = c.L("pill.order").Select(x => Convert.ToString(x)).ToList();
-            foreach (var id in new[] { "mic", "clock", "date", "timer", "media", "windows" }) if (!pOrder.Contains(id)) pOrder.Add(id);
+            foreach (var id in new[] { "mic", "clock", "date", "battery", "timer", "media", "windows" }) if (!pOrder.Contains(id)) pOrder.Add(id);
             winFirst = pOrder.IndexOf("windows") == 0;
             foreach (var id in pOrder)
             {
@@ -3587,12 +3635,40 @@ namespace Nook
             };
             body.MouseWheel += (s, e) =>
             {
-                if (app.Cfg.S("pill.wheel", "volume") != "volume") return;
+                if (Keyboard.Modifiers.HasFlag(ModifierKeys.Shift))
+                {
+                    double cur = BrightnessManager.Get();
+                    double next = Math.Max(0.0, Math.Min(1.0, cur + (e.Delta > 0 ? 0.04 : -0.04)));
+                    BrightnessManager.Set(next);
+                    Flash(Loc.Tr("Helligkeit ") + Math.Round(next * 100) + " %", 1.2, false);
+                    e.Handled = true;
+                    return;
+                }
+                if (Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
+                {
+                    double cur = NightLight.GetWarmth();
+                    double next = Math.Max(0.0, Math.Min(1.0, cur + (e.Delta > 0 ? 0.04 : -0.04)));
+                    NightLight.SetWarmth(next, true);
+                    Flash(Loc.Tr("Nachtmodus ") + Math.Round(next * 100) + " %", 1.2, false);
+                    e.Handled = true;
+                    return;
+                }
+                string wmode = app.Cfg.S("pill.wheel", "volume");
+                if (wmode == "brightness")
+                {
+                    double cur = BrightnessManager.Get();
+                    double next = Math.Max(0.0, Math.Min(1.0, cur + (e.Delta > 0 ? 0.04 : -0.04)));
+                    BrightnessManager.Set(next);
+                    Flash(Loc.Tr("Helligkeit ") + Math.Round(next * 100) + " %", 1.2, false);
+                    e.Handled = true;
+                    return;
+                }
                 double v = Audio.Get();
                 if (v < 0) return;
                 v = Math.Max(0, Math.Min(1, v + (e.Delta > 0 ? 0.02 : -0.02)));
                 Audio.Set(v);
                 Flash(Loc.Tr("Lautstärke ") + Math.Round(v * 100) + " %", 1.2, false);
+                e.Handled = true;
             };
             Closed += (s, e) =>
             {
@@ -3661,6 +3737,22 @@ namespace Nook
             date.Visibility = c.B("pill.showDate", false) ? Visibility.Visible : Visibility.Collapsed;
             string df = c.S("pill.dateFormat", "short");
             date.Text = now.ToString(df == "long" ? (Loc.En ? "dddd, MMMM d" : "dddd, d. MMMM") : df == "numeric" ? (Loc.En ? "MM/dd" : "dd.MM.") : Loc.Tr("ddd d. MMM"), Th.Cul);
+
+            if (!BatteryManager.HasBattery() || !c.B("pill.showBattery", true))
+            {
+                batterySp.Visibility = Visibility.Collapsed;
+            }
+            else
+            {
+                double pct = BatteryManager.GetPercent();
+                bool chg = BatteryManager.IsCharging();
+                bool sav = BatteryManager.IsBatterySaver();
+                battIcon.Text = BatteryManager.PillGlyph(pct, chg, sav);
+                battIcon.Foreground = sav ? Th.Accent : (pct <= 0.2 && !chg ? Th.B(Color.FromRgb(240, 90, 80)) : Th.Text);
+                battTx.Text = Math.Round(pct * 100) + " %";
+                batterySp.ToolTip = BatteryManager.GetEstimatedTime();
+                batterySp.Visibility = Visibility.Visible;
+            }
 
             bool flash = flashText != null && (flashSticky || now < flashUntil);
             if (!flash) flashText = null;
@@ -4208,6 +4300,7 @@ namespace Nook
             switch (id)
             {
                 case "controls": return "\uE9E9";
+                case "hardware": return "\uE950";
                 case "today": return "\uE787";
                 case "apps": return "\uE71D";
                 case "taskbar": return "\uE7C4";
@@ -4421,6 +4514,7 @@ namespace Nook
                 switch (id)
                 {
                     case "controls": t = new ControlsTab(app); break;
+                    case "hardware": t = new HardwareTab(app); break;
                     case "today": t = new TodayTab(app); break;
                     case "apps": t = new AppsTab(app); break;
                     case "taskbar": t = new TaskbarTab(app); break;
@@ -4959,10 +5053,10 @@ namespace Nook
         public override string Id { get { return "controls"; } }
         public override string Title { get { return Loc.Tr("Steuerung"); } }
 
-        readonly Tile wifi, bt, audio, night, dark, mic;
+        readonly Tile wifi, bt, audio, night, dark, mic, saver;
+        readonly FillSlider vol, bright;
         static string lastWifi;
         static bool wifiKnown;
-        readonly FillSlider vol;
         readonly Border cover;
         readonly TextBlock mTitle, mArtist, mApp, tPos, tDur, playIc;
         readonly SeekBar seek;
@@ -4986,6 +5080,8 @@ namespace Nook
             night = new Tile("\uE708", Loc.Tr("Nachtmodus"), true);
             dark = new Tile("\uE793", Loc.Tr("Dunkler Modus"), false);
             mic = new Tile("\uE720", "Mikrofon", false);
+            saver = new Tile("\uEC02", Loc.Tr("Stromsparmodus"), false);
+            saver.Click += ToggleBatterySaver;
             wifi.Click += OpenWifi;
             wifi.ChevronClick += OpenWifi;
             wifi.IconClick += ToggleWifi;
@@ -5006,7 +5102,8 @@ namespace Nook
                 { "audio", new KeyValuePair<Tile, Action>(audio, OpenAudio) },
                 { "night", new KeyValuePair<Tile, Action>(night, ToggleNightLight) },
                 { "dark", new KeyValuePair<Tile, Action>(dark, ToggleDark) },
-                { "mic", new KeyValuePair<Tile, Action>(mic, ToggleMic) }
+                { "mic", new KeyValuePair<Tile, Action>(mic, ToggleMic) },
+                { "saver", new KeyValuePair<Tile, Action>(saver, ToggleBatterySaver) }
             };
             // Kacheln in der eingestellten Reihenfolge, je 3 pro Reihe
             var ids = app.Cfg.L("controls.tiles").Select(x => Convert.ToString(x)).Where(all.ContainsKey).Distinct().ToList();
@@ -5014,9 +5111,12 @@ namespace Nook
             var rowsDef = new List<GridLength>();
             int tileRows = (ids.Count + 2) / 3;
             for (int i = 0; i < tileRows; i++) { rowsDef.Add(U.Px(62)); rowsDef.Add(U.Px(10)); }
-            bool showVol = app.Cfg.B("controls.showVolume", true), showMedia = app.Cfg.B("controls.showMedia", true);
-            int volRow = rowsDef.Count;
-            if (showVol) { rowsDef.Add(U.Px(48)); rowsDef.Add(U.Px(12)); }
+            bool showVol = app.Cfg.B("controls.showVolume", true);
+            bool showBright = app.Cfg.B("controls.showBrightness", true);
+            bool showMedia = app.Cfg.B("controls.showMedia", true);
+            int volRow = -1, brightRow = -1;
+            if (showVol) { volRow = rowsDef.Count; rowsDef.Add(U.Px(48)); rowsDef.Add(U.Px(10)); }
+            if (showBright) { brightRow = rowsDef.Count; rowsDef.Add(U.Px(48)); rowsDef.Add(U.Px(12)); }
             int mediaRow = rowsDef.Count;
             rowsDef.Add(U.Star(1));
             var g = U.G(rowsDef.ToArray(), null);
@@ -5038,7 +5138,11 @@ namespace Nook
             vol = new FillSlider(48);
             vol.Changed += v => { Audio.Set(v); vol.SetIcon(Audio.Glyph(v, false)); };
             vol.IconClick += () => { Audio.ToggleMute(); RefreshVolume(); };
-            if (showVol) U.Put(g, vol, volRow, 0);
+            if (showVol && volRow >= 0) U.Put(g, vol, volRow, 0);
+
+            bright = new FillSlider(48);
+            bright.Changed += v => { BrightnessManager.Set(v); bright.SetIcon(BrightnessManager.Glyph(v)); };
+            if (showBright && brightRow >= 0) U.Put(g, bright, brightRow, 0);
 
             // Medien
             var mg = U.G(new[] { U.Auto, U.Px(10), U.Star(1), U.Px(10), U.Auto }, null);
@@ -5230,6 +5334,34 @@ namespace Nook
             mic.Set(has && !muted, !has ? Loc.Tr("Kein Gerät") : muted ? Loc.Tr("Stumm") : (Audio.MicName() ?? Loc.Tr("An")));
         }
 
+        void ToggleBatterySaver()
+        {
+            bool next = !BatteryManager.IsBatterySaver();
+            BatteryManager.SetBatterySaver(next);
+            App.Pill.Flash(Loc.Tr("Stromsparmodus") + ": " + (next ? Loc.Tr("An") : Loc.Tr("Aus")), 2, false);
+            RefreshBatterySaver();
+        }
+
+        void RefreshBatterySaver()
+        {
+            if (saver == null) return;
+            if (!BatteryManager.HasBattery())
+            {
+                saver.Set(false, Loc.Tr("Kein Akku"));
+                return;
+            }
+            bool isSaver = BatteryManager.IsBatterySaver();
+            saver.Set(isSaver, isSaver ? Loc.Tr("An") : Loc.Tr("Aus"));
+        }
+
+        void RefreshBrightness()
+        {
+            if (bright == null) return;
+            double b = BrightnessManager.Get();
+            bright.Value = b;
+            bright.SetIcon(BrightnessManager.Glyph(b));
+        }
+
         void ToggleDark()
         {
             bool d = !IsDark();
@@ -5279,6 +5411,8 @@ namespace Nook
         public override void Shown()
         {
             RefreshVolume();
+            RefreshBrightness();
+            RefreshBatterySaver();
             audio.Set(true, Audio.DeviceName());
             RefreshMic();
             bool d = IsDark();
@@ -6721,6 +6855,515 @@ namespace Nook
             if (armed != null && (DateTime.Now - armedAt).TotalSeconds > 4) Disarm();
         }
     }
+
+    // -----------------------------------------------------------------
+    //  Tab: Hardware (System & Performance Status)
+    // -----------------------------------------------------------------
+    public class HardwareTab : TabBase
+    {
+        public override string Id { get { return "hardware"; } }
+        public override string Title { get { return Loc.Tr("Hardware"); } }
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern bool GetSystemTimes(out long idleTime, out long kernelTime, out long userTime);
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct PERFORMANCE_INFORMATION
+        {
+            public int cb;
+            public IntPtr CommitTotal;
+            public IntPtr CommitLimit;
+            public IntPtr CommitPeak;
+            public IntPtr PhysicalTotal;
+            public IntPtr PhysicalAvailable;
+            public IntPtr SystemCache;
+            public IntPtr KernelTotal;
+            public IntPtr KernelPaged;
+            public IntPtr KernelNonpaged;
+            public IntPtr PageSize;
+            public int HandleCount;
+            public int ProcessCount;
+            public int ThreadCount;
+        }
+
+        [DllImport("psapi.dll", SetLastError = true)]
+        static extern bool GetPerformanceInfo(out PERFORMANCE_INFORMATION pi, int cb);
+
+        readonly TextBlock cpuNameTx, cpuUsageTx, cpuBarVal, cpuCoresTx, cpuSpeedTx, cpuProcTx, cpuUptimeTx;
+        readonly Border cpuBar;
+
+        readonly TextBlock ramUsageTx, ramBarVal, ramAvailTx, ramCommitTx;
+        readonly Border ramBar;
+
+        readonly StackPanel disksSp, gpuSp;
+
+        readonly TextBlock netAdapterTx, netRxTx, netTxTx, netIpTx, netTotalTx;
+
+        readonly TextBlock battPctTx, battBarVal, battStatusTx;
+        readonly Border battBar;
+        readonly Btn battSaverBtn;
+
+        static long lastIdleTime, lastKernelTime, lastUserTime;
+        static double lastCpuPercent;
+
+        static long lastBytesRecv, lastBytesSent;
+        static DateTime lastNetTime = DateTime.MinValue;
+        static double lastRxSpeed, lastTxSpeed;
+        static string cachedCpuName = "";
+        static int cachedCpuMhz = 0;
+        static List<string[]> cachedGpus = null;
+
+        public HardwareTab(NookApp app) : base(app)
+        {
+            InitCpuStaticInfo();
+            InitGpuStaticInfo();
+
+            var g = U.G(null, new[] { U.Star(1), U.Px(12), U.Star(1), U.Px(12), U.Star(1) });
+
+            // ---------------- Col 1: CPU + RAM ----------------
+            var col1 = U.G(new[] { U.Auto, U.Px(12), U.Auto }, null);
+
+            // CPU Card
+            var cpuCardContent = new StackPanel();
+            var cpuHead = U.G(null, new[] { U.Px(26), U.Star(1), U.Auto });
+            U.Put(cpuHead, U.I("\uE7F8", 15, Th.Accent), 0, 0);
+            U.Put(cpuHead, U.T(Loc.Tr("Prozessor"), 14, Th.Text, FontWeights.SemiBold), 0, 1);
+            cpuUsageTx = U.T("0 %", 14, Th.Accent, FontWeights.Bold);
+            U.Put(cpuHead, cpuUsageTx, 0, 2);
+            cpuCardContent.Children.Add(cpuHead);
+
+            cpuNameTx = U.T(cachedCpuName, 12, Th.Muted);
+            cpuNameTx.Margin = new Thickness(0, 4, 0, 2);
+            cpuNameTx.TextTrimming = TextTrimming.CharacterEllipsis;
+            cpuCardContent.Children.Add(cpuNameTx);
+
+            cpuBar = MakeProgressBar(out cpuBarVal, Th.Accent);
+            cpuCardContent.Children.Add(cpuBar);
+
+            var cpuDetails = new StackPanel { Margin = new Thickness(0, 4, 0, 0) };
+            cpuCoresTx = U.T(Environment.ProcessorCount + " " + Loc.Tr("Kerne") + " (logisch)", 11.5, Th.Muted);
+            cpuSpeedTx = U.T(string.Format("{0:F2} GHz", cachedCpuMhz / 1000.0), 11.5, Th.Muted);
+            cpuProcTx = U.T("0 " + Loc.Tr("Prozesse"), 11.5, Th.Muted);
+            cpuUptimeTx = U.T("0h 0m", 11.5, Th.Muted);
+
+            cpuDetails.Children.Add(cpuCoresTx);
+            cpuDetails.Children.Add(cpuSpeedTx);
+            cpuDetails.Children.Add(cpuProcTx);
+            cpuDetails.Children.Add(cpuUptimeTx);
+            cpuCardContent.Children.Add(cpuDetails);
+
+            U.Put(col1, U.Card(cpuCardContent), 0, 0);
+
+            // RAM Card
+            var ramCardContent = new StackPanel();
+            var ramHead = U.G(null, new[] { U.Px(26), U.Star(1), U.Auto });
+            U.Put(ramHead, U.I("\uE9D9", 15, Th.Accent), 0, 0);
+            U.Put(ramHead, U.T(Loc.Tr("Arbeitsspeicher"), 14, Th.Text, FontWeights.SemiBold), 0, 1);
+            ramUsageTx = U.T("0 %", 14, Th.Accent, FontWeights.Bold);
+            U.Put(ramHead, ramUsageTx, 0, 2);
+            ramCardContent.Children.Add(ramHead);
+
+            ramBar = MakeProgressBar(out ramBarVal, Th.Accent);
+            ramCardContent.Children.Add(ramBar);
+
+            var ramDetails = new StackPanel { Margin = new Thickness(0, 4, 0, 0) };
+            ramAvailTx = U.T("0 GB " + Loc.Tr("Verfügbar"), 11.5, Th.Muted);
+            ramCommitTx = U.T("0 / 0 GB " + Loc.Tr("zugewiesen"), 11.5, Th.Muted);
+            ramDetails.Children.Add(ramAvailTx);
+            ramDetails.Children.Add(ramCommitTx);
+            ramCardContent.Children.Add(ramDetails);
+
+            U.Put(col1, U.Card(ramCardContent), 2, 0);
+            U.Put(g, col1, 0, 0);
+
+            // ---------------- Col 2: Disks + GPU ----------------
+            var col2 = U.G(new[] { U.Auto, U.Px(12), U.Auto }, null);
+
+            // Disks Card
+            var disksContent = new StackPanel();
+            var diskHead = U.G(null, new[] { U.Px(26), U.Star(1) });
+            U.Put(diskHead, U.I("\uEDA2", 15, Th.Accent), 0, 0);
+            U.Put(diskHead, U.T(Loc.Tr("Laufwerke"), 14, Th.Text, FontWeights.SemiBold), 0, 1);
+            disksContent.Children.Add(diskHead);
+
+            disksSp = new StackPanel { Margin = new Thickness(0, 6, 0, 0) };
+            disksContent.Children.Add(disksSp);
+            U.Put(col2, U.Card(disksContent), 0, 0);
+
+            // GPU Card
+            var gpuContent = new StackPanel();
+            var gpuHead = U.G(null, new[] { U.Px(26), U.Star(1) });
+            U.Put(gpuHead, U.I("\uE7F4", 15, Th.Accent), 0, 0);
+            U.Put(gpuHead, U.T(Loc.Tr("Grafikkarte"), 14, Th.Text, FontWeights.SemiBold), 0, 1);
+            gpuContent.Children.Add(gpuHead);
+
+            gpuSp = new StackPanel { Margin = new Thickness(0, 6, 0, 0) };
+            gpuContent.Children.Add(gpuSp);
+            U.Put(col2, U.Card(gpuContent), 2, 0);
+            U.Put(g, col2, 0, 2);
+
+            // ---------------- Col 3: Network + Battery ----------------
+            var col3 = U.G(new[] { U.Auto, U.Px(12), U.Auto }, null);
+
+            // Network Card
+            var netContent = new StackPanel();
+            var netHead = U.G(null, new[] { U.Px(26), U.Star(1) });
+            U.Put(netHead, U.I("\uE968", 15, Th.Accent), 0, 0);
+            U.Put(netHead, U.T(Loc.Tr("Netzwerk"), 14, Th.Text, FontWeights.SemiBold), 0, 1);
+            netContent.Children.Add(netHead);
+
+            netAdapterTx = U.T("", 12, Th.Text, FontWeights.SemiBold);
+            netAdapterTx.Margin = new Thickness(0, 4, 0, 2);
+            netAdapterTx.TextTrimming = TextTrimming.CharacterEllipsis;
+            netContent.Children.Add(netAdapterTx);
+
+            var netSpeedGrid = U.G(null, new[] { U.Star(1), U.Star(1) });
+            netSpeedGrid.Margin = new Thickness(0, 4, 0, 4);
+            netRxTx = U.T("↓ 0 B/s", 12, Th.Accent, FontWeights.SemiBold);
+            netTxTx = U.T("↑ 0 B/s", 12, Th.Muted, FontWeights.SemiBold);
+            netTxTx.HorizontalAlignment = HorizontalAlignment.Right;
+            U.Put(netSpeedGrid, netRxTx, 0, 0);
+            U.Put(netSpeedGrid, netTxTx, 0, 1);
+            netContent.Children.Add(netSpeedGrid);
+
+            var netDetails = new StackPanel();
+            netIpTx = U.T("IP: –", 11.5, Th.Muted);
+            netTotalTx = U.T("", 11.5, Th.Muted);
+            netDetails.Children.Add(netIpTx);
+            netDetails.Children.Add(netTotalTx);
+            netContent.Children.Add(netDetails);
+            U.Put(col3, U.Card(netContent), 0, 0);
+
+            // Battery & Power Card
+            var battContent = new StackPanel();
+            var battHead = U.G(null, new[] { U.Px(26), U.Star(1), U.Auto });
+            U.Put(battHead, U.I("\uEBA8", 15, Th.Accent), 0, 0);
+            U.Put(battHead, U.T(Loc.Tr("Akku"), 14, Th.Text, FontWeights.SemiBold), 0, 1);
+            battPctTx = U.T("– %", 14, Th.Accent, FontWeights.Bold);
+            U.Put(battHead, battPctTx, 0, 2);
+            battContent.Children.Add(battHead);
+
+            battBar = MakeProgressBar(out battBarVal, Th.Accent);
+            battContent.Children.Add(battBar);
+
+            battStatusTx = U.T(Loc.Tr("Netzbetrieb"), 12, Th.Muted);
+            battStatusTx.Margin = new Thickness(0, 4, 0, 8);
+            battContent.Children.Add(battStatusTx);
+
+            battSaverBtn = new Btn(U.T(Loc.Tr("Stromsparmodus"), 12, Th.Text, FontWeights.SemiBold), Th.Surface2, Th.Hover, 8, new Thickness(10, 5, 10, 5));
+            battSaverBtn.Click += () =>
+            {
+                bool next = !BatteryManager.IsBatterySaver();
+                BatteryManager.SetBatterySaver(next);
+                app.Pill.Flash(Loc.Tr("Stromsparmodus") + ": " + (next ? Loc.Tr("An") : Loc.Tr("Aus")), 2, false);
+                Tick();
+            };
+            battContent.Children.Add(battSaverBtn);
+
+            U.Put(col3, U.Card(battContent), 2, 0);
+            U.Put(g, col3, 0, 4);
+
+            View = new ScrollViewer { Content = g, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled, Focusable = false };
+            PopulateStaticCards();
+        }
+
+        static Border MakeProgressBar(out TextBlock valBlock, Brush fillBrush)
+        {
+            var g = new Grid { Height = 6, Margin = new Thickness(0, 6, 0, 6) };
+            var track = new Border { Background = Th.Surface2, CornerRadius = new CornerRadius(3) };
+            var fill = new Border { Background = fillBrush, CornerRadius = new CornerRadius(3), HorizontalAlignment = HorizontalAlignment.Left, Width = 0 };
+            g.Children.Add(track);
+            g.Children.Add(fill);
+            valBlock = new TextBlock { Tag = fill, Text = "0" };
+            var container = new Border { Child = g };
+            var vb = valBlock;
+            container.SizeChanged += (s, e) =>
+            {
+                double pct;
+                if (double.TryParse(vb.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out pct))
+                {
+                    fill.Width = Math.Max(0, Math.Min(container.ActualWidth, container.ActualWidth * pct));
+                }
+            };
+            return container;
+        }
+
+        static void UpdateBar(Border barContainer, TextBlock valBlock, double fraction)
+        {
+            fraction = Math.Max(0.0, Math.Min(1.0, fraction));
+            valBlock.Text = fraction.ToString(CultureInfo.InvariantCulture);
+            var fill = valBlock.Tag as Border;
+            if (fill != null && barContainer.ActualWidth > 0)
+            {
+                fill.Width = Math.Max(0, barContainer.ActualWidth * fraction);
+            }
+        }
+
+        static void InitCpuStaticInfo()
+        {
+            if (!string.IsNullOrEmpty(cachedCpuName)) return;
+            try
+            {
+                using (var k = Registry.LocalMachine.OpenSubKey(@"HARDWARE\DESCRIPTION\System\CentralProcessor\0"))
+                {
+                    if (k != null)
+                    {
+                        cachedCpuName = (k.GetValue("ProcessorNameString") as string ?? "").Trim();
+                        cachedCpuMhz = Convert.ToInt32(k.GetValue("~MHz") ?? 0);
+                    }
+                }
+            }
+            catch { }
+            if (string.IsNullOrEmpty(cachedCpuName)) cachedCpuName = "Intel / AMD Processor";
+        }
+
+        static void InitGpuStaticInfo()
+        {
+            if (cachedGpus != null) return;
+            cachedGpus = new List<string[]>();
+            try
+            {
+                using (var searcher = new System.Management.ManagementObjectSearcher("SELECT Name, AdapterRAM FROM Win32_VideoController"))
+                using (var results = searcher.Get())
+                {
+                    foreach (System.Management.ManagementObject mo in results)
+                    {
+                        string name = (mo["Name"] as string ?? "").Trim();
+                        if (string.IsNullOrEmpty(name) || name.IndexOf("Virtual", StringComparison.OrdinalIgnoreCase) >= 0) continue;
+                        long ram = 0;
+                        try { ram = Convert.ToInt64(mo["AdapterRAM"] ?? 0); } catch { }
+                        string ramStr = ram > 0 ? string.Format("{0:F1} GB VRAM", ram / (1024.0 * 1024.0 * 1024.0)) : "";
+                        cachedGpus.Add(new[] { name, ramStr });
+                        mo.Dispose();
+                    }
+                }
+            }
+            catch { }
+        }
+
+        void PopulateStaticCards()
+        {
+            // Populate Disks
+            disksSp.Children.Clear();
+            try
+            {
+                foreach (var d in DriveInfo.GetDrives())
+                {
+                    if (d.IsReady && d.DriveType == DriveType.Fixed)
+                    {
+                        double total = d.TotalSize / (1024.0 * 1024.0 * 1024.0);
+                        double free = d.TotalFreeSpace / (1024.0 * 1024.0 * 1024.0);
+                        double used = Math.Max(0, total - free);
+                        double fraction = total > 0 ? used / total : 0;
+
+                        var driveRow = new StackPanel { Margin = new Thickness(0, 0, 0, 8) };
+                        var dHead = U.G(null, new[] { U.Star(1), U.Auto });
+                        string label = string.IsNullOrEmpty(d.VolumeLabel) ? d.Name : string.Format("{0} [{1}]", d.Name, d.VolumeLabel);
+                        U.Put(dHead, U.T(label, 12, Th.Text, FontWeights.SemiBold), 0, 0);
+                        U.Put(dHead, U.T(string.Format("{0:F0} %", fraction * 100), 12, fraction > 0.9 ? Th.B(Color.FromRgb(240, 90, 80)) : Th.Muted), 0, 1);
+                        driveRow.Children.Add(dHead);
+
+                        TextBlock dVal;
+                        var dBar = MakeProgressBar(out dVal, fraction > 0.9 ? Th.B(Color.FromRgb(240, 90, 80)) : Th.Accent);
+                        UpdateBar(dBar, dVal, fraction);
+                        driveRow.Children.Add(dBar);
+
+                        var dSub = U.T(string.Format("{0:F1} GB {1} {2:F1} GB", free, Loc.Tr("frei von"), total), 11, Th.Muted);
+                        driveRow.Children.Add(dSub);
+
+                        disksSp.Children.Add(driveRow);
+                    }
+                }
+            }
+            catch { }
+
+            // Populate GPUs
+            gpuSp.Children.Clear();
+            if (cachedGpus != null && cachedGpus.Count > 0)
+            {
+                foreach (var gpu in cachedGpus)
+                {
+                    var gRow = new StackPanel { Margin = new Thickness(0, 0, 0, 8) };
+                    var gName = U.T(gpu[0], 12, Th.Text, FontWeights.SemiBold);
+                    gName.TextTrimming = TextTrimming.CharacterEllipsis;
+                    gRow.Children.Add(gName);
+                    if (!string.IsNullOrEmpty(gpu[1]))
+                    {
+                        var gRam = U.T(gpu[1], 11.5, Th.Muted);
+                        gRow.Children.Add(gRam);
+                    }
+                    gpuSp.Children.Add(gRow);
+                }
+            }
+            else
+            {
+                gpuSp.Children.Add(U.T(Loc.Tr("Grafikkarte aktiv"), 12, Th.Muted));
+            }
+        }
+
+        static double QueryCpuUsage()
+        {
+            long idle, kernel, user;
+            if (GetSystemTimes(out idle, out kernel, out user))
+            {
+                if (lastIdleTime != 0)
+                {
+                    long usr = user - lastUserTime;
+                    long ker = kernel - lastKernelTime;
+                    long idl = idle - lastIdleTime;
+                    long sys = usr + ker;
+                    if (sys > 0)
+                    {
+                        lastCpuPercent = Math.Max(0.0, Math.Min(100.0, (sys - idl) * 100.0 / sys));
+                    }
+                }
+                lastIdleTime = idle;
+                lastKernelTime = kernel;
+                lastUserTime = user;
+            }
+            return lastCpuPercent;
+        }
+
+        public override void Shown()
+        {
+            Tick();
+        }
+
+        public override void Tick()
+        {
+            // 1. CPU
+            double cpuPct = QueryCpuUsage();
+            cpuUsageTx.Text = Math.Round(cpuPct) + " %";
+            UpdateBar(cpuBar, cpuBarVal, cpuPct / 100.0);
+
+            var t = TimeSpan.FromMilliseconds(N.GetTickCount64());
+            string uptimeStr = t.TotalDays >= 1 ? string.Format("{0}d {1}h {2}m", (int)t.TotalDays, t.Hours, t.Minutes) : string.Format("{0}h {1}m {2}s", t.Hours, t.Minutes, t.Seconds);
+            cpuUptimeTx.Text = Loc.Tr("Betriebszeit") + ": " + uptimeStr;
+
+            // 2. RAM & Processes
+            PERFORMANCE_INFORMATION pi = new PERFORMANCE_INFORMATION();
+            pi.cb = Marshal.SizeOf(pi);
+            if (GetPerformanceInfo(out pi, pi.cb))
+            {
+                long ps = pi.PageSize.ToInt64();
+                double totalGb = (pi.PhysicalTotal.ToInt64() * ps) / (1024.0 * 1024.0 * 1024.0);
+                double availGb = (pi.PhysicalAvailable.ToInt64() * ps) / (1024.0 * 1024.0 * 1024.0);
+                double usedGb = Math.Max(0, totalGb - availGb);
+                double fraction = totalGb > 0 ? usedGb / totalGb : 0;
+
+                ramUsageTx.Text = string.Format("{0:F1} / {1:F1} GB ({2:F0} %)", usedGb, totalGb, fraction * 100);
+                UpdateBar(ramBar, ramBarVal, fraction);
+
+                ramAvailTx.Text = string.Format("{0:F1} GB {1}", availGb, Loc.Tr("Verfügbar"));
+
+                double commitGb = (pi.CommitTotal.ToInt64() * ps) / (1024.0 * 1024.0 * 1024.0);
+                double commitLimitGb = (pi.CommitLimit.ToInt64() * ps) / (1024.0 * 1024.0 * 1024.0);
+                ramCommitTx.Text = string.Format("{0:F1} / {1:F1} GB {2}", commitGb, commitLimitGb, Loc.Tr("zugewiesen"));
+
+                cpuProcTx.Text = string.Format("{0} {1} / {2} {3}", pi.ProcessCount, Loc.Tr("Prozesse"), pi.ThreadCount, Loc.Tr("Threads"));
+            }
+
+            // 3. Network
+            try
+            {
+                System.Net.NetworkInformation.NetworkInterface bestNi = null;
+                long totalRx = 0, totalTx = 0;
+                foreach (var ni in System.Net.NetworkInformation.NetworkInterface.GetAllNetworkInterfaces())
+                {
+                    if (ni.OperationalStatus == System.Net.NetworkInformation.OperationalStatus.Up &&
+                        ni.NetworkInterfaceType != System.Net.NetworkInformation.NetworkInterfaceType.Loopback &&
+                        ni.NetworkInterfaceType != System.Net.NetworkInformation.NetworkInterfaceType.Tunnel)
+                    {
+                        var st = ni.GetIPv4Statistics();
+                        totalRx += st.BytesReceived;
+                        totalTx += st.BytesSent;
+                        if (bestNi == null && (ni.NetworkInterfaceType == System.Net.NetworkInformation.NetworkInterfaceType.Wireless80211 || ni.NetworkInterfaceType == System.Net.NetworkInformation.NetworkInterfaceType.Ethernet))
+                        {
+                            bestNi = ni;
+                        }
+                    }
+                }
+
+                if (bestNi != null)
+                {
+                    netAdapterTx.Text = bestNi.Name + " (" + bestNi.Description + ")";
+                    try
+                    {
+                        var ipProp = bestNi.GetIPProperties();
+                        foreach (var ua in ipProp.UnicastAddresses)
+                        {
+                            if (ua.Address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
+                            {
+                                netIpTx.Text = "IP: " + ua.Address.ToString();
+                                break;
+                            }
+                        }
+                    }
+                    catch { }
+                }
+                else
+                {
+                    netAdapterTx.Text = Loc.Tr("Keine aktive Verbindung");
+                }
+
+                DateTime now = DateTime.UtcNow;
+                if (lastNetTime != DateTime.MinValue)
+                {
+                    double secs = (now - lastNetTime).TotalSeconds;
+                    if (secs > 0)
+                    {
+                        lastRxSpeed = Math.Max(0, (totalRx - lastBytesRecv) / secs);
+                        lastTxSpeed = Math.Max(0, (totalTx - lastBytesSent) / secs);
+                    }
+                }
+                lastBytesRecv = totalRx;
+                lastBytesSent = totalTx;
+                lastNetTime = now;
+
+                netRxTx.Text = "↓ " + FormatSpeed(lastRxSpeed);
+                netTxTx.Text = "↑ " + FormatSpeed(lastTxSpeed);
+                netTotalTx.Text = string.Format(Loc.Tr("Gesamt:") + " ↓ {0}   ↑ {1}", FormatBytes(totalRx), FormatBytes(totalTx));
+            }
+            catch { }
+
+            // 4. Battery
+            if (!BatteryManager.HasBattery())
+            {
+                battPctTx.Text = "–";
+                battStatusTx.Text = Loc.Tr("Kein Akku");
+                battSaverBtn.Visibility = Visibility.Collapsed;
+            }
+            else
+            {
+                double pct = BatteryManager.GetPercent();
+                battPctTx.Text = Math.Round(pct * 100) + " %";
+                UpdateBar(battBar, battBarVal, pct);
+
+                battStatusTx.Text = BatteryManager.GetEstimatedTime();
+                battSaverBtn.Visibility = Visibility.Visible;
+                bool sav = BatteryManager.IsBatterySaver();
+                battSaverBtn.SetColors(sav ? Th.Accent : Th.Surface2, sav ? Th.AccentHover : Th.Hover);
+                var tb = battSaverBtn.Child as TextBlock;
+                if (tb != null) tb.Foreground = sav ? Th.AccentText : Th.Text;
+            }
+        }
+
+        static string FormatSpeed(double bytesPerSec)
+        {
+            if (bytesPerSec >= 1024 * 1024 * 1024) return string.Format("{0:F1} GB/s", bytesPerSec / (1024.0 * 1024.0 * 1024.0));
+            if (bytesPerSec >= 1024 * 1024) return string.Format("{0:F1} MB/s", bytesPerSec / (1024.0 * 1024.0));
+            if (bytesPerSec >= 1024) return string.Format("{0:F0} KB/s", bytesPerSec / 1024.0);
+            return string.Format("{0:F0} B/s", bytesPerSec);
+        }
+
+        static string FormatBytes(long bytes)
+        {
+            if (bytes >= 1024L * 1024 * 1024 * 1024) return string.Format("{0:F1} TB", bytes / (1024.0 * 1024.0 * 1024.0 * 1024.0));
+            if (bytes >= 1024L * 1024 * 1024) return string.Format("{0:F1} GB", bytes / (1024.0 * 1024.0 * 1024.0));
+            if (bytes >= 1024L * 1024) return string.Format("{0:F1} MB", bytes / (1024.0 * 1024.0));
+            return string.Format("{0:F0} KB", bytes / 1024.0);
+        }
+    }
 }
 
 namespace Nook
@@ -7459,7 +8102,7 @@ namespace Nook
 
         static readonly string[][] TabNames =
         {
-            new[] { "controls", "Steuerung" }, new[] { "today", "Heute" }, new[] { "apps", "Apps" },
+            new[] { "controls", "Steuerung" }, new[] { "hardware", "Hardware" }, new[] { "today", "Heute" }, new[] { "apps", "Apps" },
             new[] { "taskbar", "Taskbar" }, new[] { "clipboard", "Zwischenablage" }, new[] { "power", "Power" }
         };
 
@@ -8254,7 +8897,7 @@ namespace Nook
             return new[]
             {
                 new[] { "wifi", Loc.Tr("WLAN"), "" }, new[] { "bluetooth", "Bluetooth", "" }, new[] { "audio", "Audio", "" },
-                new[] { "night", Loc.Tr("Nachtmodus"), "" }, new[] { "dark", Loc.Tr("Dunkler Modus"), "" }, new[] { "mic", Loc.Tr("Mikrofon"), "" }
+                new[] { "night", Loc.Tr("Nachtmodus"), "" }, new[] { "dark", Loc.Tr("Dunkler Modus"), "" }, new[] { "mic", Loc.Tr("Mikrofon"), "" }, new[] { "saver", Loc.Tr("Stromsparmodus"), "" }
             };
         }
 
@@ -8272,7 +8915,7 @@ namespace Nook
             return new[]
             {
                 new[] { "mic", Loc.Tr("Mikro (nur wenn stumm)"), "" }, new[] { "clock", Loc.Tr("Uhrzeit"), "" },
-                new[] { "date", Loc.Tr("Datum"), "" }, new[] { "timer", Loc.Tr("Timer (nur wenn er läuft)"), "" },
+                new[] { "date", Loc.Tr("Datum"), "" }, new[] { "battery", Loc.Tr("Akku"), "" }, new[] { "timer", Loc.Tr("Timer (nur wenn er läuft)"), "" },
                 new[] { "media", Loc.Tr("Laufender Song"), "" }, new[] { "windows", Loc.Tr("Offene Apps"), "" }
             };
         }
@@ -8318,7 +8961,8 @@ namespace Nook
                 Row(Loc.Tr("Datumsformat"), null, Seg("pill.dateFormat", O("short:Kurz", "long:Lang", "numeric:Zahlen"), null)),
                 Row(Loc.Tr("Laufender Song"), null, Toggle("pill.showMedia", null)),
                 Row(Loc.Tr("Max. Breite des Songs"), null, Slider("pill.mediaWidth", 100, 400, 10, "px", false)),
-                Row(Loc.Tr("Mikro stumm anzeigen"), Loc.Tr("rotes Symbol in der Pille"), Toggle("pill.showMicMuted", null)));
+                Row(Loc.Tr("Mikro stumm anzeigen"), Loc.Tr("rotes Symbol in der Pille"), Toggle("pill.showMicMuted", null)),
+                Row(Loc.Tr("Akku anzeigen"), Loc.Tr("Prozent und Ladezustand in der Pille"), Toggle("pill.showBattery", null)));
             Section("pill", "Offene Apps",
                 Row(Loc.Tr("Offene Apps anzeigen"), Loc.Tr("Klick öffnet/minimiert, Mittelklick schließt"), Toggle("pill.showWindows", null)),
                 Row(Loc.Tr("Fenster einer App zusammenfassen"), Loc.Tr("aus = jedes Fenster bekommt ein eigenes Icon"), Toggle("pill.groupWindows", null)),
@@ -8326,7 +8970,7 @@ namespace Nook
                 Row(Loc.Tr("Icon-Größe"), Loc.Tr("0 = automatisch"), Slider("pill.iconSize", 0, 32, 1, "px", false)));
             Section("pill", "Maus",
                 Row(Loc.Tr("Klick auf die Pille öffnet"), null, Choice("pill.clickTab", () => { var l = TabOptions(false); l.Insert(0, new[] { "start", Loc.Tr("Start-Tab") }); return l; }, 190)),
-                Row(Loc.Tr("Mausrad über der Pille"), null, Seg("pill.wheel", O("volume:Lautstärke", "none:Nichts"), null)),
+                Row(Loc.Tr("Mausrad über der Pille"), null, Seg("pill.wheel", O("volume:Lautstärke", "brightness:Helligkeit", "none:Nichts"), null)),
                 Row(Loc.Tr("Mittelklick auf ein App-Icon"), null, Seg("pill.middleClick", O("close:Schließen", "none:Nichts"), null)));
             Section("pill", "Am Rand (Strich)",
                 Note(Loc.Tr("Gilt, wenn „Pille anzeigen“ auf „Am Rand“ steht.")),
@@ -8418,6 +9062,7 @@ namespace Nook
                 Note(Loc.Tr("Kacheln an/aus und Reihenfolge – je drei pro Reihe.")),
                 OrderList("controls.tiles", TileItems(), 0, true),
                 Row(Loc.Tr("Lautstärke-Regler"), null, Toggle("controls.showVolume", null)),
+                Row(Loc.Tr("Helligkeits-Regler"), null, Toggle("controls.showBrightness", null)),
                 Row(Loc.Tr("Medien-Karte"), Loc.Tr("Cover, Titel, Spulen"), Toggle("controls.showMedia", null)));
 
             var presetsTb = new TextBox { Text = string.Join(", ", GL("today.timerPresets")) };
@@ -8690,7 +9335,7 @@ namespace Nook
             bool sec = c.B("pill.clockSeconds", false);
             string df = c.S("pill.dateFormat", "short");
             var order = c.L("pill.order").Select(x => Convert.ToString(x)).ToList();
-            foreach (var id in new[] { "mic", "clock", "date", "timer", "media", "windows" }) if (!order.Contains(id)) order.Add(id);
+            foreach (var id in new[] { "mic", "clock", "date", "battery", "timer", "media", "windows" }) if (!order.Contains(id)) order.Add(id);
 
             // Teile in der eingestellten Reihenfolge: (art, element) – art "win" für die App-Icons
             var parts = new List<KeyValuePair<string, FrameworkElement>>();
@@ -8701,6 +9346,14 @@ namespace Nook
                     el = U.T(now.ToString(c.B("pill.clock24h", true) ? (sec ? "HH:mm:ss" : "HH:mm") : (sec ? "h:mm:ss tt" : "h:mm tt"), Th.Cul), fs, Th.Text, FontWeights.SemiBold);
                 else if (id == "date" && c.B("pill.showDate", false))
                     el = U.T(now.ToString(df == "long" ? (Loc.En ? "dddd, MMMM d" : "dddd, d. MMMM") : df == "numeric" ? (Loc.En ? "MM/dd" : "dd.MM.") : Loc.Tr("ddd d. MMM"), Th.Cul), fs, Th.Muted);
+                else if (id == "battery" && c.B("pill.showBattery", true))
+                {
+                    var bsp = new StackPanel { Orientation = Orientation.Horizontal };
+                    bsp.Children.Add(U.I("\uEBA8", fs, Th.Text));
+                    var bt = U.T("85 %", fs, Th.Muted); bt.Margin = new Thickness(4, 0, 0, 0);
+                    bsp.Children.Add(bt);
+                    el = bsp;
+                }
                 else if (id == "media" && c.B("pill.showMedia", true))
                 {
                     var m = new StackPanel { Orientation = Orientation.Horizontal };
@@ -9409,6 +10062,262 @@ namespace Nook
     }
 
     // =================================================================
+    // =================================================================
+    //  Helligkeit (Brightness Manager)
+    // =================================================================
+    public static class BrightnessManager
+    {
+        static double current = -1;
+
+        [DllImport("user32.dll")]
+        static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint dwFlags);
+
+        [DllImport("dxva2.dll", SetLastError = true)]
+        static extern bool GetNumberOfPhysicalMonitorsFromHMONITOR(IntPtr hMonitor, out uint pdwNumberOfPhysicalMonitors);
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
+        struct PHYSICAL_MONITOR
+        {
+            public IntPtr hPhysicalMonitor;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
+            public string szPhysicalMonitorDescription;
+        }
+
+        [DllImport("dxva2.dll", SetLastError = true)]
+        static extern bool GetPhysicalMonitorsFromHMONITOR(IntPtr hMonitor, uint dwPhysicalMonitorArraySize, [Out] PHYSICAL_MONITOR[] pPhysicalMonitorArray);
+
+        [DllImport("dxva2.dll", SetLastError = true)]
+        static extern bool DestroyPhysicalMonitors(uint dwPhysicalMonitorArraySize, [In] PHYSICAL_MONITOR[] pPhysicalMonitorArray);
+
+        [DllImport("dxva2.dll", SetLastError = true)]
+        static extern bool GetMonitorBrightness(IntPtr hMonitor, out uint pdwMinimumBrightness, out uint pdwCurrentBrightness, out uint pdwMaximumBrightness);
+
+        [DllImport("dxva2.dll", SetLastError = true)]
+        static extern bool SetMonitorBrightness(IntPtr hMonitor, uint dwNewBrightness);
+
+        public static double Get()
+        {
+            try
+            {
+                using (var searcher = new System.Management.ManagementObjectSearcher(@"root\wmi", "SELECT CurrentBrightness FROM WmiMonitorBrightness WHERE Active = True"))
+                {
+                    foreach (System.Management.ManagementObject mo in searcher.Get())
+                    {
+                        byte b = (byte)mo["CurrentBrightness"];
+                        current = b / 100.0;
+                        return current;
+                    }
+                }
+            }
+            catch { }
+
+            try
+            {
+                IntPtr hmon = MonitorFromWindow(IntPtr.Zero, 1);
+                uint count = 0;
+            if (hmon != IntPtr.Zero && GetNumberOfPhysicalMonitorsFromHMONITOR(hmon, out count) && count > 0)
+                {
+                    var pMons = new PHYSICAL_MONITOR[count];
+                    if (GetPhysicalMonitorsFromHMONITOR(hmon, count, pMons))
+                    {
+                        try
+                        {
+                            uint min, cur, max;
+                            if (GetMonitorBrightness(pMons[0].hPhysicalMonitor, out min, out cur, out max) && max > min)
+                            {
+                                current = (double)(cur - min) / (max - min);
+                                return current;
+                            }
+                        }
+                        finally { DestroyPhysicalMonitors(count, pMons); }
+                    }
+                }
+            }
+            catch { }
+
+            if (current < 0) current = 1.0;
+            return current;
+        }
+
+        public static void Set(double val)
+        {
+            val = Math.Max(0.0, Math.Min(1.0, val));
+            current = val;
+            byte target = (byte)Math.Round(val * 100);
+
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                try
+                {
+                    using (var searcher = new System.Management.ManagementObjectSearcher(@"root\wmi", "SELECT * FROM WmiMonitorBrightnessMethods WHERE Active = True"))
+                    {
+                        foreach (System.Management.ManagementObject mo in searcher.Get())
+                        {
+                            mo.InvokeMethod("WmiSetBrightness", new object[] { 1, target });
+                            return;
+                        }
+                    }
+                }
+                catch { }
+
+                try
+                {
+                    IntPtr hmon = MonitorFromWindow(IntPtr.Zero, 1);
+                    uint count = 0;
+            if (hmon != IntPtr.Zero && GetNumberOfPhysicalMonitorsFromHMONITOR(hmon, out count) && count > 0)
+                    {
+                        var pMons = new PHYSICAL_MONITOR[count];
+                        if (GetPhysicalMonitorsFromHMONITOR(hmon, count, pMons))
+                        {
+                            try
+                            {
+                                uint min, cur, max;
+                                if (GetMonitorBrightness(pMons[0].hPhysicalMonitor, out min, out cur, out max))
+                                {
+                                    uint b = (uint)(min + val * (max - min));
+                                    SetMonitorBrightness(pMons[0].hPhysicalMonitor, b);
+                                }
+                            }
+                            finally { DestroyPhysicalMonitors(count, pMons); }
+                        }
+                    }
+                }
+                catch { }
+            });
+        }
+
+        public static string Glyph(double val)
+        {
+            if (val <= 0.25) return "\uE708";
+            return "\uE706";
+        }
+    }
+
+    // =================================================================
+    //  Akku & Stromsparmodus (Battery & Battery Saver Manager)
+    // =================================================================
+    public static class BatteryManager
+    {
+        [StructLayout(LayoutKind.Sequential)]
+        public struct SYSTEM_POWER_STATUS
+        {
+            public byte ACLineStatus;
+            public byte BatteryFlag;
+            public byte BatteryLifePercent;
+            public byte SystemStatusFlag;
+            public int BatteryLifeTime;
+            public int BatteryFullLifeTime;
+        }
+
+        [DllImport("kernel32.dll")]
+        public static extern bool GetSystemPowerStatus(out SYSTEM_POWER_STATUS status);
+
+        public static bool HasBattery()
+        {
+            SYSTEM_POWER_STATUS s;
+            if (GetSystemPowerStatus(out s))
+            {
+                return (s.BatteryFlag & 128) == 0 && s.BatteryLifePercent <= 100;
+            }
+            return false;
+        }
+
+        public static bool IsBatterySaver()
+        {
+            SYSTEM_POWER_STATUS s;
+            if (GetSystemPowerStatus(out s))
+            {
+                return s.SystemStatusFlag == 1;
+            }
+            return false;
+        }
+
+        public static double GetPercent()
+        {
+            SYSTEM_POWER_STATUS s;
+            if (GetSystemPowerStatus(out s))
+            {
+                return s.BatteryLifePercent <= 100 ? s.BatteryLifePercent / 100.0 : 1.0;
+            }
+            return 1.0;
+        }
+
+        public static bool IsCharging()
+        {
+            SYSTEM_POWER_STATUS s;
+            if (GetSystemPowerStatus(out s))
+            {
+                return s.ACLineStatus == 1;
+            }
+            return false;
+        }
+
+        public static string GetEstimatedTime()
+        {
+            SYSTEM_POWER_STATUS s;
+            if (GetSystemPowerStatus(out s))
+            {
+                if (s.ACLineStatus == 1) return Loc.Tr("Netzbetrieb (Wird geladen)");
+                if (s.BatteryLifeTime > 0)
+                {
+                    int hrs = s.BatteryLifeTime / 3600;
+                    int mins = (s.BatteryLifeTime % 3600) / 60;
+                    return hrs > 0 ? string.Format(Loc.Tr("ca. {0} Std. {1} Min."), hrs, mins) : string.Format(Loc.Tr("ca. {0} Min."), mins);
+                }
+                return Loc.Tr("Akkubetrieb");
+            }
+            return "";
+        }
+
+        public static void SetBatterySaver(bool enable)
+        {
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                try
+                {
+                    bool onAc = IsCharging();
+                    int threshold = enable ? 100 : (onAc ? 0 : 20);
+                    string which = onAc ? "/setacvalueindex" : "/setdcvalueindex";
+                    var p1 = Process.Start(new ProcessStartInfo
+                    {
+                        FileName = "powercfg",
+                        Arguments = string.Format("{0} SCHEME_CURRENT SUB_ENERGYSAVER ESBATTTHRESHOLD {1}", which, threshold),
+                        CreateNoWindow = true,
+                        UseShellExecute = false
+                    });
+                    if (p1 != null) p1.WaitForExit(1500);
+
+                    var p2 = Process.Start(new ProcessStartInfo
+                    {
+                        FileName = "powercfg",
+                        Arguments = "/setactive SCHEME_CURRENT",
+                        CreateNoWindow = true,
+                        UseShellExecute = false
+                    });
+                    if (p2 != null) p2.WaitForExit(1500);
+                }
+                catch { }
+            });
+        }
+
+        public static string PillGlyph(double pct, bool charging, bool saver)
+        {
+            if (saver) return "\uEC02";
+            if (charging) return "\uEBB5";
+            if (pct >= 0.95) return "\uEBAA";
+            if (pct >= 0.85) return "\uEBA9";
+            if (pct >= 0.75) return "\uEBA8";
+            if (pct >= 0.65) return "\uEBA7";
+            if (pct >= 0.55) return "\uEBA6";
+            if (pct >= 0.45) return "\uEBA5";
+            if (pct >= 0.35) return "\uEBA4";
+            if (pct >= 0.25) return "\uEBA3";
+            if (pct >= 0.15) return "\uEBA2";
+            if (pct >= 0.05) return "\uEBA1";
+            return "\uEBA0";
+        }
+    }
+
     public static class WifiManager
     {
         public static bool IsWifiOn()
