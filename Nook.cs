@@ -1,4 +1,4 @@
-﻿// =====================================================================
+// =====================================================================
 //  Nook – schlanker Taskleisten-Ersatz für Windows 11
 //  Eine einzige Quelldatei. Bauen mit build.bat (nutzt den C#-Compiler,
 //  der in Windows bereits enthalten ist – keine Installation nötig).
@@ -173,7 +173,7 @@ namespace Nook
               ""showWindows"": true, ""groupWindows"": true, ""maxWindowIcons"": 12, ""iconSize"": 0,
               ""clickTab"": ""start"", ""wheel"": ""volume"", ""middleClick"": ""close"",
               ""lipWidth"": 72, ""lipThickness"": 4, ""lipHideMs"": 650,
-              ""reserveSpace"": false, ""hideInFullscreen"": true },
+              ""reserveSpace"": false, ""hideInFullscreen"": true, ""showInBrowserFullscreen"": true },
   ""panel"": { ""width"": 840, ""height"": 470, ""radius"": 24, ""borderWidth"": 0, ""shadow"": true, ""shadowStrength"": 0.45,
               ""animStyle"": ""morph"", ""animationMs"": 240, ""closeOnBlur"": true, ""startTab"": ""last"",
               ""tabStyle"": ""pill"", ""tabIcons"": ""text"", ""tabAlign"": ""center"",
@@ -182,7 +182,8 @@ namespace Nook
               ""surface"": ""#161618"", ""surface2"": ""#232326"", ""text"": ""#F2F2F0"", ""muted"": ""#8E8E93"",
               ""pillBackground"": ""#0B0B0C"", ""border"": """", ""opacity"": 0.98,
               ""cardStyle"": ""filled"", ""cardRadius"": 18, ""font"": ""Segoe UI Variable Display"", ""scale"": ""auto"" },
-  ""tabs"": [ ""controls"", ""hardware"", ""today"", ""apps"", ""taskbar"", ""clipboard"", ""power"" ],
+  ""tabs"": [ ""controls"", ""hardware"", ""gemini"", ""today"", ""apps"", ""taskbar"", ""clipboard"", ""power"" ],
+  ""gemini"": { ""browser"": ""auto"", ""shortcut"": ""Win+G"", ""url"": ""https://gemini.google.com/app"" },
   ""behavior"": { ""winKey"": true, ""winTab"": ""same"", ""hotkey"": """", ""typeToSearch"": ""apps"", ""hideWindowsTaskbar"": true, ""autostart"": false },
   ""controls"": { ""tiles"": [ ""wifi"", ""bluetooth"", ""audio"", ""night"", ""dark"", ""mic"", ""saver"" ], ""showVolume"": true, ""showBrightness"": true, ""showMedia"": true },
   ""today"": { ""showWeather"": true, ""showTimer"": true, ""showTodos"": true, ""weatherCity"": """", ""weatherUnit"": ""C"", ""timerPresets"": [ 1, 5, 10, 15, 20 ] },
@@ -306,6 +307,24 @@ namespace Nook
         static readonly Dictionary<string, string> Map = new Dictionary<string, string>
         {
             { "Hardware", "Hardware" },
+            { "Mit Google-Konto verbunden", "Connected to Google Account" },
+            { "Öffnen (Win+G)", "Open (Win+G)" },
+            { "Intelligenter KI-Assistent · Schnellzugriff mit Win+G von überall", "Smart AI Assistant · Quick access with Win+G anywhere" },
+            { "Frage an Gemini... (Enter öffnet Chat)", "Ask Gemini anything... (Enter opens chat)" },
+            { "Neuer Chat", "New Chat" },
+            { "Frische Unterhaltung", "Fresh conversation" },
+            { "Gemini Live", "Gemini Live" },
+            { "Sprachmodus", "Voice mode" },
+            { "Recherche", "Research" },
+            { "Tiefen-Analyse", "Deep analysis" },
+            { "Chat-Verlauf", "Chat history" },
+            { "Gespeicherte Chats", "Saved chats" },
+            { "Drücke jederzeit Win+G zum Ein- und Ausblenden", "Press Win+G anytime to toggle" },
+            { "In Vollbild-Browsern anzeigen", "Show in fullscreen browsers" },
+            { "Pille bleibt bei F11 im Browser sichtbar", "Pill stays visible during F11 in browser" },
+            { "Browser für Gemini", "Browser for Gemini" },
+            { "Nimmt gespeicherte Google-Anmeldung", "Uses saved Google account" },
+            { "Prompt kopiert – mit Strg+V einfügen", "Prompt copied – paste with Ctrl+V" },
             { "Netzwerk", "Network" },
             { "Keine aktive Verbindung", "No active connection" },
             { "Grafikkarte aktiv", "Graphics active" },
@@ -1394,8 +1413,28 @@ namespace Nook
             return new RECT { Left = b.Left, Top = b.Top, Right = b.Right, Bottom = b.Bottom };
         }
 
+        public static bool IsBrowserWindow(string cls, uint pid)
+        {
+            if (cls == "MozillaWindowClass") return true;
+            if (cls == "Chrome_WidgetWin_1")
+            {
+                try
+                {
+                    using (var p = Process.GetProcessById((int)pid))
+                    {
+                        string n = p.ProcessName.ToLowerInvariant();
+                        return n == "chrome" || n == "msedge" || n == "brave" || n == "opera" ||
+                               n == "vivaldi" || n == "arc" || n == "browser" || n == "firefox" ||
+                               n == "zen" || n == "waterfox" || n == "librewolf" || n == "thorium";
+                    }
+                }
+                catch { return true; }
+            }
+            return false;
+        }
+
         // --- Vollbild-Erkennung -------------------------------------
-        public static bool FullscreenOnMonitorOf(IntPtr ownWindow)
+        public static bool FullscreenOnMonitorOf(IntPtr ownWindow, bool showInBrowserFullscreen = true)
         {
             IntPtr h = GetForegroundWindow();
             if (h == IntPtr.Zero || h == ownWindow) return false;
@@ -1414,6 +1453,9 @@ namespace Nook
             if (SHQueryUserNotificationState(out st) == 0 && st == 3) return true;
 
             if (IsZoomed(h)) return false;
+
+            // F11 Browser Fullscreen: stay visible if enabled
+            if (showInBrowserFullscreen && IsBrowserWindow(cls, pid)) return false;
 
             var mi = new MONITORINFO(); mi.cbSize = Marshal.SizeOf(typeof(MONITORINFO));
             if (!GetMonitorInfo(mon, ref mi)) return false;
@@ -1849,11 +1891,11 @@ namespace Nook
     {
         N.HookProc proc;
         IntPtr hh;
-        bool winDown, combo;
-        readonly Action onWin;
+        bool winDown, combo, geminiTriggered;
+        readonly Action onWin, onWinG;
         public bool Enabled = true;
 
-        public KeyHook(Action onWin) { this.onWin = onWin; }
+        public KeyHook(Action onWin, Action onWinG = null) { this.onWin = onWin; this.onWinG = onWinG; }
 
         public void Install()
         {
@@ -1869,9 +1911,6 @@ namespace Nook
             if (hh != IntPtr.Zero) { N.UnhookWindowsHookEx(hh); hh = IntPtr.Zero; }
         }
 
-        // Win wird zunächst zurückgehalten. Kommt eine weitere Taste dazu, wird Win
-        // nachgereicht (Win+E usw. funktionieren). Bleibt Win allein, sieht Windows
-        // die Taste nie – so öffnet sich weder Startmenü noch Suche.
         uint winVk;
 
         IntPtr Cb(int code, IntPtr w, IntPtr l)
@@ -1890,13 +1929,13 @@ namespace Nook
                     {
                         if (down)
                         {
-                            if (!winDown) { winDown = true; combo = false; winVk = k.vkCode; }
+                            if (!winDown) { winDown = true; combo = false; geminiTriggered = false; winVk = k.vkCode; }
                             if (!combo) return new IntPtr(1);
                         }
                         else if (up)
                         {
-                            bool wasCombo = combo;
-                            winDown = false; combo = false;
+                            bool wasCombo = combo || geminiTriggered;
+                            winDown = false; combo = false; geminiTriggered = false;
                             if (!wasCombo)
                             {
                                 Application.Current.Dispatcher.BeginInvoke(onWin);
@@ -1906,19 +1945,27 @@ namespace Nook
                     }
                     else if (down && winDown && !combo)
                     {
+                        if (k.vkCode == 0x47 && onWinG != null) // 0x47 = 'G' key
+                        {
+                            combo = true;
+                            geminiTriggered = true;
+                            Application.Current.Dispatcher.BeginInvoke(onWinG);
+                            return new IntPtr(1); // Intercept and suppress Windows Xbox Game Bar
+                        }
                         combo = true;
                         N.keybd_event((byte)winVk, 0, 1, UIntPtr.Zero);
                         N.keybd_event((byte)k.vkCode, (byte)k.scanCode, (k.flags & 1) != 0 ? 1u : 0u, UIntPtr.Zero);
                         return new IntPtr(1);
+                    }
+                    else if (up && geminiTriggered && k.vkCode == 0x47)
+                    {
+                        return new IntPtr(1); // Swallow 'G' release after Win+G
                     }
                 }
             }
             return N.CallNextHookEx(hh, code, w, l);
         }
     }
-
-    // -----------------------------------------------------------------
-    //  Medien (Spotify, Browser …)
     // -----------------------------------------------------------------
     public class MediaInfo
     {
@@ -2735,6 +2782,7 @@ namespace Nook
         public readonly Countdown Timer = new Countdown();
         public IntPtr PrevForeground;
         public bool FullscreenActive, MicMuted;
+        public GeminiManager Gemini;
         public string BaseDir, DataDir;
 
         KeyHook hook;
@@ -2773,13 +2821,14 @@ namespace Nook
             Apps = new AppIndex();
             Apps.Load(Cfg.B("apps.hideUninstallers", true));
             Media = MediaSvc.Create();
+            Gemini = new GeminiManager(this);
 
             var p = new HwndSourceParameters("NookMessages") { ParentWindow = new IntPtr(-3), WindowStyle = 0 };
             msgWin = new HwndSource(p);
             msgWin.AddHook(MsgProc);
             N.AddClipboardFormatListener(msgWin.Handle);
 
-            hook = new KeyHook(() => TogglePanel("win"));
+            hook = new KeyHook(() => TogglePanel("win"), () => ToggleGemini());
             hook.Install();
             fgProc = (hk, ev, hw, o, c, t, tm) =>
             {
@@ -2902,6 +2951,7 @@ namespace Nook
         {
             if (msg == 0x031D) Clip.OnUpdate();
             else if (msg == 0x0312 && w.ToInt32() == 0x4E4B) { TogglePanel("hotkey"); handled = true; }
+            else if (msg == 0x0312 && w.ToInt32() == 0x474D) { ToggleGemini(); handled = true; }
             return IntPtr.Zero;
         }
 
@@ -2925,7 +2975,7 @@ namespace Nook
 
         void OnTick()
         {
-            bool fs = Cfg.B("pill.hideInFullscreen", true) && N.FullscreenOnMonitorOf(Pill.Handle);
+            bool fs = Cfg.B("pill.hideInFullscreen", true) && N.FullscreenOnMonitorOf(Pill.Handle, Cfg.B("pill.showInBrowserFullscreen", true));
             if (fs != FullscreenActive) { FullscreenActive = fs; Pill.UpdateVisibility(); }
             if (tbHidden && N.AnyTaskbarVisible()) N.ShowTaskbars(false);
             ApplyWorkArea();
@@ -2951,6 +3001,12 @@ namespace Nook
                 if (Pill != null) Pill.Refresh();
                 if (Panel != null && Panel.IsOpen) Panel.MediaChanged();
             }));
+        }
+
+        // --- Gemini --------------------------------------------------
+        public void ToggleGemini(string prompt = null)
+        {
+            if (Gemini != null) Gemini.Toggle(prompt);
         }
 
         // --- Panel ---------------------------------------------------
@@ -3311,6 +3367,7 @@ namespace Nook
             }
             if (vk == 0) return;
             hotkeyOn = N.RegisterHotKey(msgWin.Handle, 0x4E4B, mods, vk);
+            try { N.RegisterHotKey(msgWin.Handle, 0x474D, 0x0008 | 0x4000, 0x47); } catch { }
             if (!hotkeyOn && Pill != null) Pill.Flash(Loc.Tr("Tastenkürzel ist schon belegt: ") + hk, 4, false);
         }
 
@@ -4306,6 +4363,7 @@ namespace Nook
             {
                 case "controls": return "\uE9E9";
                 case "hardware": return "\uE950";
+                case "gemini": return "\uE945";
                 case "today": return "\uE787";
                 case "apps": return "\uE71D";
                 case "taskbar": return "\uE7C4";
@@ -4523,6 +4581,7 @@ namespace Nook
                 {
                     case "controls": t = new ControlsTab(app); break;
                     case "hardware": t = new HardwareTab(app); break;
+                    case "gemini": t = new GeminiTab(app); break;
                     case "today": t = new TodayTab(app); break;
                     case "apps": t = new AppsTab(app); break;
                     case "taskbar": t = new TaskbarTab(app); break;
@@ -7385,6 +7444,469 @@ namespace Nook
             return string.Format("{0:F0} KB", bytes / 1024.0);
         }
     }
+    // -----------------------------------------------------------------
+    //  Google Gemini Instanz & Fenster-Manager
+    // -----------------------------------------------------------------
+    public class GeminiManager
+    {
+        readonly NookApp app;
+        IntPtr geminiHwnd = IntPtr.Zero;
+
+        public GeminiManager(NookApp app)
+        {
+            this.app = app;
+        }
+
+        public string FindBrowserPath()
+        {
+            string cfgBrowser = app.Cfg.S("gemini.browser", "auto").ToLowerInvariant();
+
+            var chromePaths = new[]
+            {
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), @"Google\Chrome\Application\chrome.exe"),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), @"Google\Chrome\Application\chrome.exe"),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Google\Chrome\Application\chrome.exe")
+            };
+
+            var edgePaths = new[]
+            {
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), @"Microsoft\Edge\Application\msedge.exe"),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), @"Microsoft\Edge\Application\msedge.exe")
+            };
+
+            if (cfgBrowser == "chrome")
+            {
+                foreach (var p in chromePaths) if (File.Exists(p)) return p;
+            }
+            else if (cfgBrowser == "edge")
+            {
+                foreach (var p in edgePaths) if (File.Exists(p)) return p;
+            }
+
+            // Auto-detect: Chrome first (for Google account sync), then Edge
+            foreach (var p in chromePaths) if (File.Exists(p)) return p;
+            foreach (var p in edgePaths) if (File.Exists(p)) return p;
+
+            return null;
+        }
+
+        public string ActiveBrowserName
+        {
+            get
+            {
+                string p = FindBrowserPath();
+                if (string.IsNullOrEmpty(p)) return "Default Browser";
+                if (p.IndexOf("chrome.exe", StringComparison.OrdinalIgnoreCase) >= 0) return "Google Chrome";
+                if (p.IndexOf("msedge.exe", StringComparison.OrdinalIgnoreCase) >= 0) return "Microsoft Edge";
+                return Path.GetFileNameWithoutExtension(p);
+            }
+        }
+
+        public IntPtr FindWindow()
+        {
+            if (geminiHwnd != IntPtr.Zero && N.IsWindow(geminiHwnd) && N.IsWindowVisible(geminiHwnd))
+                return geminiHwnd;
+
+            IntPtr found = IntPtr.Zero;
+            N.EnumWindows((h, l) =>
+            {
+                if (!N.IsWindowVisible(h)) return true;
+                string title = N.TitleOf(h);
+                if (string.IsNullOrEmpty(title)) return true;
+                if (title.IndexOf("Gemini", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    uint pid;
+                    N.GetWindowThreadProcessId(h, out pid);
+                    try
+                    {
+                        using (var pr = Process.GetProcessById((int)pid))
+                        {
+                            string pn = pr.ProcessName.ToLowerInvariant();
+                            if (pn == "chrome" || pn == "msedge" || pn == "brave" || pn == "opera")
+                            {
+                                found = h;
+                                return false;
+                            }
+                        }
+                    }
+                    catch { }
+                }
+                return true;
+            }, IntPtr.Zero);
+
+            geminiHwnd = found;
+            return found;
+        }
+
+        public void Toggle(string prompt = null)
+        {
+            IntPtr h = FindWindow();
+            if (h != IntPtr.Zero)
+            {
+                IntPtr fg = N.GetForegroundWindow();
+                if (fg == h && string.IsNullOrEmpty(prompt))
+                {
+                    N.ShowWindow(h, 6 /* SW_MINIMIZE */);
+                    return;
+                }
+
+                if (N.IsIconic(h)) N.ShowWindow(h, 9 /* SW_RESTORE */);
+                N.ForceForeground(h);
+
+                if (!string.IsNullOrEmpty(prompt))
+                {
+                    SendPrompt(prompt);
+                }
+                return;
+            }
+
+            Launch(prompt);
+        }
+
+        public void Launch(string prompt = null, string customUrl = null)
+        {
+            string url = customUrl ?? app.Cfg.S("gemini.url", "https://gemini.google.com/app");
+            string browser = FindBrowserPath();
+
+            if (!string.IsNullOrEmpty(prompt))
+            {
+                try { Clipboard.SetText(prompt); } catch { }
+                if (app.Pill != null) app.Pill.Flash(Loc.Tr("Prompt kopiert â€“ mit Strg+V einfÃ¼gen"), 3, false);
+            }
+
+            try
+            {
+                if (!string.IsNullOrEmpty(browser))
+                {
+                    var psi = new ProcessStartInfo
+                    {
+                        FileName = browser,
+                        Arguments = "--app=\"" + url + "\"",
+                        UseShellExecute = true
+                    };
+                    Process.Start(psi);
+                }
+                else
+                {
+                    Process.Start(url);
+                }
+
+                var t = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(450) };
+                int attempts = 0;
+                t.Tick += (s, e) =>
+                {
+                    attempts++;
+                    IntPtr h = FindWindow();
+                    if (h != IntPtr.Zero || attempts > 14)
+                    {
+                        t.Stop();
+                        if (h != IntPtr.Zero) N.ForceForeground(h);
+                    }
+                };
+                t.Start();
+            }
+            catch (Exception ex)
+            {
+                NookApp.Log(ex);
+            }
+        }
+
+        public void NewChat()
+        {
+            Launch(null, "https://gemini.google.com/app");
+        }
+
+        public void OpenLive()
+        {
+            Launch(null, "https://gemini.google.com/app");
+        }
+
+        public void OpenResearch()
+        {
+            Launch(null, "https://gemini.google.com/app");
+        }
+
+        public void SendPrompt(string prompt)
+        {
+            if (string.IsNullOrEmpty(prompt)) return;
+            try
+            {
+                Clipboard.SetText(prompt);
+                if (app.Pill != null) app.Pill.Flash(Loc.Tr("Prompt kopiert â€“ mit Strg+V einfÃ¼gen"), 3, false);
+            }
+            catch { }
+        }
+    }
+
+    // -----------------------------------------------------------------
+    //  Tab: Gemini (Google Gemini KI-Assistent)
+    // -----------------------------------------------------------------
+    public class GeminiTab : TabBase
+    {
+        public override string Id { get { return "gemini"; } }
+        public override string Title { get { return "Gemini"; } }
+
+        TextBox promptBox;
+        TextBlock statusEngineTx;
+
+        public GeminiTab(NookApp app) : base(app)
+        {
+            var root = new Grid();
+
+            var card = new Border
+            {
+                Background = Th.CardBg,
+                CornerRadius = new CornerRadius(Th.CardR),
+                Padding = new Thickness(20, 16, 20, 16)
+            };
+
+            var mainStack = new StackPanel();
+
+            // 1. Top Header Row: Icon + Title + Badge + Launch Button
+            var headerGrid = U.G(null, new[] { U.Auto, U.Star(1), U.Auto });
+
+            var titleSp = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            var sparkle = U.I("\uE945", 22, Th.Accent);
+            sparkle.Margin = new Thickness(0, 0, 10, 0);
+            titleSp.Children.Add(sparkle);
+
+            var titleTx = U.T("Google Gemini", 18, Th.Text, FontWeights.Bold);
+            titleSp.Children.Add(titleTx);
+
+            // Green connected dot badge
+            var badge = new Border
+            {
+                Background = Th.Surface2,
+                CornerRadius = new CornerRadius(10),
+                Padding = new Thickness(8, 3, 10, 3),
+                Margin = new Thickness(14, 0, 0, 0),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            var badgeSp = new StackPanel { Orientation = Orientation.Horizontal };
+            var dot = new TextBlock
+            {
+                Text = "â—",
+                FontSize = 9,
+                Foreground = new SolidColorBrush(Color.FromRgb(52, 168, 83)), // Google Green
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 6, 0)
+            };
+            dot.Effect = new System.Windows.Media.Effects.DropShadowEffect { Color = Color.FromRgb(52, 168, 83), BlurRadius = 6, ShadowDepth = 0, Opacity = 0.8 };
+            badgeSp.Children.Add(dot);
+            badgeSp.Children.Add(U.T(Loc.Tr("Mit Google-Konto verbunden"), 11.5, Th.Muted, FontWeights.SemiBold));
+            badge.Child = badgeSp;
+            titleSp.Children.Add(badge);
+
+            U.Put(headerGrid, titleSp, 0, 0);
+
+            // Launch Button (Right)
+            var launchBtn = new Btn(
+                U.T(Loc.Tr("Ã–ffnen (Win+G)"), 12.5, Th.AccentText, FontWeights.Bold),
+                Th.Accent,
+                Th.AccentHover,
+                12,
+                new Thickness(16, 8, 16, 8)
+            );
+            launchBtn.Click += () =>
+            {
+                App.ToggleGemini();
+                App.ClosePanel();
+            };
+            U.Put(headerGrid, launchBtn, 0, 2);
+
+            mainStack.Children.Add(headerGrid);
+
+            // Subtitle
+            var subTx = U.T(Loc.Tr("Intelligenter KI-Assistent Â· Schnellzugriff mit Win+G von Ã¼berall"), 12.5, Th.Muted);
+            subTx.Margin = new Thickness(32, 4, 0, 16);
+            mainStack.Children.Add(subTx);
+
+            // 2. Quick Ask Input Box
+            var promptBorder = new Border
+            {
+                Background = Th.Surface2,
+                CornerRadius = new CornerRadius(12),
+                Padding = new Thickness(6, 4, 6, 4),
+                Margin = new Thickness(0, 0, 0, 16)
+            };
+            var promptGrid = U.G(null, new[] { U.Star(1), U.Auto });
+
+            promptBox = new TextBox
+            {
+                Background = Brushes.Transparent,
+                BorderThickness = new Thickness(0),
+                Foreground = Th.Text,
+                CaretBrush = Th.Accent,
+                FontSize = 13.5,
+                Padding = new Thickness(10, 8, 10, 8),
+                VerticalContentAlignment = VerticalAlignment.Center
+            };
+
+            var placeholder = U.T(Loc.Tr("Frage an Gemini... (Enter Ã¶ffnet Chat)"), 13.5, Th.Muted);
+            placeholder.IsHitTestVisible = false;
+            placeholder.Margin = new Thickness(12, 8, 0, 0);
+            placeholder.VerticalAlignment = VerticalAlignment.Center;
+
+            promptBox.TextChanged += (s, e) =>
+            {
+                placeholder.Visibility = string.IsNullOrEmpty(promptBox.Text) ? Visibility.Visible : Visibility.Collapsed;
+            };
+
+            promptBox.KeyDown += (s, e) =>
+            {
+                if (e.Key == System.Windows.Input.Key.Enter)
+                {
+                    string txt = promptBox.Text.Trim();
+                    if (!string.IsNullOrEmpty(txt))
+                    {
+                        App.ToggleGemini(txt);
+                        promptBox.Text = "";
+                        App.ClosePanel();
+                    }
+                    e.Handled = true;
+                }
+            };
+
+            var promptInputGrid = new Grid();
+            promptInputGrid.Children.Add(promptBox);
+            promptInputGrid.Children.Add(placeholder);
+            U.Put(promptGrid, promptInputGrid, 0, 0);
+
+            var sendBtn = new Btn(
+                U.I("\uE72A", 14, Th.AccentText), // Forward Arrow Icon
+                Th.Accent,
+                Th.AccentHover,
+                8,
+                new Thickness(12, 8, 12, 8)
+            );
+            sendBtn.VerticalAlignment = VerticalAlignment.Center;
+            sendBtn.Click += () =>
+            {
+                string txt = promptBox.Text.Trim();
+                App.ToggleGemini(txt);
+                promptBox.Text = "";
+                App.ClosePanel();
+            };
+            U.Put(promptGrid, sendBtn, 0, 1);
+
+            promptBorder.Child = promptGrid;
+            mainStack.Children.Add(promptBorder);
+
+            // 3. Action Tiles (4 items in a row)
+            var actionGrid = U.G(null, new[] { U.Star(1), U.Px(10), U.Star(1), U.Px(10), U.Star(1), U.Px(10), U.Star(1) });
+
+            var t1 = MakeActionTile("\uE8BD", Loc.Tr("Neuer Chat"), Loc.Tr("Frische Unterhaltung"), () => { App.Gemini.NewChat(); App.ClosePanel(); });
+            var t2 = MakeActionTile("\uE720", Loc.Tr("Gemini Live"), Loc.Tr("Sprachmodus"), () => { App.Gemini.OpenLive(); App.ClosePanel(); });
+            var t3 = MakeActionTile("\uE721", Loc.Tr("Recherche"), Loc.Tr("Tiefen-Analyse"), () => { App.Gemini.OpenResearch(); App.ClosePanel(); });
+            var t4 = MakeActionTile("\uE8F1", Loc.Tr("Chat-Verlauf"), Loc.Tr("Gespeicherte Chats"), () => { App.Gemini.Launch(); App.ClosePanel(); });
+
+            U.Put(actionGrid, t1, 0, 0);
+            U.Put(actionGrid, t2, 0, 2);
+            U.Put(actionGrid, t3, 0, 4);
+            U.Put(actionGrid, t4, 0, 6);
+
+            mainStack.Children.Add(actionGrid);
+
+            // 4. Footer info bar
+            var footer = new Border
+            {
+                Background = Th.Surface,
+                CornerRadius = new CornerRadius(10),
+                Padding = new Thickness(14, 10, 14, 10),
+                Margin = new Thickness(0, 16, 0, 0)
+            };
+            var footGrid = U.G(null, new[] { U.Auto, U.Star(1), U.Auto });
+
+            var footLeft = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+
+            // Keycaps for Win + G
+            var capWin = MakeKeycap("Win");
+            var capPlus = U.T("+", 12, Th.Muted, FontWeights.Bold); capPlus.Margin = new Thickness(4, 0, 4, 0); capPlus.VerticalAlignment = VerticalAlignment.Center;
+            var capG = MakeKeycap("G");
+            var tipTx = U.T(Loc.Tr("DrÃ¼cke jederzeit Win+G zum Ein- und Ausblenden"), 12, Th.Muted);
+            tipTx.Margin = new Thickness(10, 0, 0, 0);
+            tipTx.VerticalAlignment = VerticalAlignment.Center;
+
+            footLeft.Children.Add(capWin);
+            footLeft.Children.Add(capPlus);
+            footLeft.Children.Add(capG);
+            footLeft.Children.Add(tipTx);
+            U.Put(footGrid, footLeft, 0, 0);
+
+            statusEngineTx = U.T("Browser: " + App.Gemini.ActiveBrowserName, 12, Th.Muted);
+            statusEngineTx.VerticalAlignment = VerticalAlignment.Center;
+            U.Put(footGrid, statusEngineTx, 0, 2);
+
+            footer.Child = footGrid;
+            mainStack.Children.Add(footer);
+
+            card.Child = mainStack;
+            root.Children.Add(card);
+            View = root;
+        }
+
+        Border MakeActionTile(string glyph, string title, string sub, Action act)
+        {
+            var sp = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+            var ic = U.I(glyph, 18, Th.Accent);
+            ic.HorizontalAlignment = HorizontalAlignment.Center;
+            ic.Margin = new Thickness(0, 0, 0, 6);
+            sp.Children.Add(ic);
+
+            var t = U.T(title, 13, Th.Text, FontWeights.SemiBold);
+            t.HorizontalAlignment = HorizontalAlignment.Center;
+            sp.Children.Add(t);
+
+            var s = U.T(sub, 11, Th.Muted);
+            s.HorizontalAlignment = HorizontalAlignment.Center;
+            s.Margin = new Thickness(0, 2, 0, 0);
+            sp.Children.Add(s);
+
+            var b = new Btn(sp, Th.Surface2, Th.Surface, 12, new Thickness(10, 14, 10, 14));
+            b.Click += act;
+            return b;
+        }
+
+        Border MakeKeycap(string text)
+        {
+            var b = new Border
+            {
+                Background = Th.Surface2,
+                BorderBrush = Th.CardBorder,
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(5),
+                Padding = new Thickness(6, 2, 6, 2),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            b.Child = U.T(text, 11, Th.Text, FontWeights.Bold);
+            return b;
+        }
+
+        public override void Shown()
+        {
+            if (statusEngineTx != null && App.Gemini != null)
+                statusEngineTx.Text = "Browser: " + App.Gemini.ActiveBrowserName;
+            if (promptBox != null)
+                promptBox.Focus();
+        }
+
+        public override void FocusMain()
+        {
+            if (promptBox != null) promptBox.Focus();
+        }
+
+        public override bool TypeInto(string text)
+        {
+            if (promptBox != null)
+            {
+                promptBox.Focus();
+                promptBox.Text += text;
+                promptBox.CaretIndex = promptBox.Text.Length;
+                return true;
+            }
+            return false;
+        }
+    }
 }
 
 namespace Nook
@@ -8123,7 +8645,7 @@ namespace Nook
 
         static readonly string[][] TabNames =
         {
-            new[] { "controls", "Steuerung" }, new[] { "hardware", "Hardware" }, new[] { "today", "Heute" }, new[] { "apps", "Apps" },
+            new[] { "controls", "Steuerung" }, new[] { "hardware", "Hardware" }, new[] { "gemini", "Gemini" }, new[] { "today", "Heute" }, new[] { "apps", "Apps" },
             new[] { "taskbar", "Taskbar" }, new[] { "clipboard", "Zwischenablage" }, new[] { "power", "Power" }
         };
 

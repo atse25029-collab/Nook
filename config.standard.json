@@ -43,7 +43,8 @@
     "lipThickness": 4,
     "lipHideMs": 650,
     "reserveSpace": false,
-    "hideInFullscreen": true
+    "hideInFullscreen": true,
+    "showInBrowserFullscreen": true
   },
   "panel": {
     "width": 780,
@@ -88,6 +89,11 @@
     "clipboard",
     "power"
   ],
+  "gemini": {
+    "browser": "auto",
+    "shortcut": "Win+G",
+    "url": "https://gemini.google.com/app"
+  },
   "behavior": {
     "winKey": true,
     "winTab": "same",
