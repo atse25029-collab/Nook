@@ -1397,25 +1397,30 @@ namespace Nook
         // --- Vollbild-Erkennung -------------------------------------
         public static bool FullscreenOnMonitorOf(IntPtr ownWindow)
         {
-            int st;
-            if (SHQueryUserNotificationState(out st) == 0 && (st == 2 || st == 3 || st == 4)) return true;
-
             IntPtr h = GetForegroundWindow();
             if (h == IntPtr.Zero || h == ownWindow) return false;
+            if (!IsWindowVisible(h)) return false;
             uint pid; GetWindowThreadProcessId(h, out pid);
             if (pid == (uint)Process.GetCurrentProcess().Id) return false;
             string cls = ClassOf(h);
             if (cls == "Progman" || cls == "WorkerW" || cls == "Shell_TrayWnd" || cls == "Shell_SecondaryTrayWnd") return false;
-            if (IsZoomed(h) || IsIconic(h)) return false;
+            if (IsIconic(h)) return false;
+
             IntPtr mon = MonitorFromWindow(h, 2);
             if (ownWindow != IntPtr.Zero && mon != MonitorFromWindow(ownWindow, 2)) return false;
+
+            // Direct3D exclusive fullscreen game
+            int st;
+            if (SHQueryUserNotificationState(out st) == 0 && st == 3) return true;
+
+            if (IsZoomed(h)) return false;
+
             var mi = new MONITORINFO(); mi.cbSize = Marshal.SizeOf(typeof(MONITORINFO));
             if (!GetMonitorInfo(mon, ref mi)) return false;
             RECT r;
             if (!GetWindowRect(h, out r)) return false;
             return r.Left <= mi.rcMonitor.Left && r.Top <= mi.rcMonitor.Top && r.Right >= mi.rcMonitor.Right && r.Bottom >= mi.rcMonitor.Bottom;
         }
-
         // --- Fenster-Icons ------------------------------------------
         public static ImageSource WindowIcon(IntPtr h)
         {
