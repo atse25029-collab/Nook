@@ -5340,6 +5340,7 @@ namespace Nook
             BatteryManager.SetBatterySaver(next);
             App.Pill.Flash(Loc.Tr("Stromsparmodus") + ": " + (next ? Loc.Tr("An") : Loc.Tr("Aus")), 2, false);
             RefreshBatterySaver();
+            App.Pill.Refresh();
         }
 
         void RefreshBatterySaver()
@@ -5441,6 +5442,7 @@ namespace Nook
         public override void Tick()
         {
             if (!vol.Dragging) RefreshVolume();
+            RefreshBatterySaver();
         }
 
         void RefreshVolume()
@@ -7057,6 +7059,7 @@ namespace Nook
                 BatteryManager.SetBatterySaver(next);
                 app.Pill.Flash(Loc.Tr("Stromsparmodus") + ": " + (next ? Loc.Tr("An") : Loc.Tr("Aus")), 2, false);
                 Tick();
+                app.Pill.Refresh();
             };
             battContent.Children.Add(battSaverBtn);
 
@@ -7344,7 +7347,11 @@ namespace Nook
                 bool sav = BatteryManager.IsBatterySaver();
                 battSaverBtn.SetColors(sav ? Th.Accent : Th.Surface2, sav ? Th.AccentHover : Th.Hover);
                 var tb = battSaverBtn.Child as TextBlock;
-                if (tb != null) tb.Foreground = sav ? Th.AccentText : Th.Text;
+                if (tb != null)
+                {
+                    tb.Text = Loc.Tr("Stromsparmodus") + ": " + (sav ? Loc.Tr("An") : Loc.Tr("Aus"));
+                    tb.Foreground = sav ? Th.AccentText : Th.Text;
+                }
             }
         }
 
@@ -10212,6 +10219,18 @@ namespace Nook
         [DllImport("kernel32.dll")]
         public static extern bool GetSystemPowerStatus(out SYSTEM_POWER_STATUS status);
 
+        [DllImport("ntdll.dll")]
+        static extern int RtlPublishWnfStateData(ulong StateName, IntPtr TypeId, byte[] Buffer, int Length, IntPtr ExplicitScope);
+
+        [DllImport("ntdll.dll", SetLastError = true)]
+        static extern uint NtQueryWnfStateData(ref ulong pStateName, IntPtr pTypeId, IntPtr pExplicitScope, out uint changeStamp, [Out] byte[] pBuffer, ref uint pBufferSize);
+
+        [DllImport("powrprof.dll")]
+        static extern uint PowerSetActiveOverlayScheme(Guid OverlaySchemeGuid);
+
+        static readonly Guid GUID_MAX_POWER_SAVINGS = new Guid("961cc777-2547-4f9d-8174-7d86181b8a7a");
+        const ulong WNF_PO_ENERGY_SAVER_OVERRIDE = 0x41C6013DA3BC3075UL;
+
         public static bool HasBattery()
         {
             SYSTEM_POWER_STATUS s;
@@ -10224,11 +10243,39 @@ namespace Nook
 
         public static bool IsBatterySaver()
         {
-            SYSTEM_POWER_STATUS s;
-            if (GetSystemPowerStatus(out s))
+            try
             {
-                return s.SystemStatusFlag == 1;
+                var status = Registry.GetValue(@"HKEY_LOCAL_MACHINE\System\CurrentControlSet\Control\Power", "EnergySaverState", null);
+                if (status is int)
+                {
+                    int val = (int)status;
+                    if (val == 1) return true;
+                    if (val == 2 || val == 0) return false;
+                }
             }
+            catch { }
+
+            try
+            {
+                ulong stateName = WNF_PO_ENERGY_SAVER_OVERRIDE;
+                uint sz = 4, stamp = 0;
+                byte[] buf = new byte[4];
+                if (NtQueryWnfStateData(ref stateName, IntPtr.Zero, IntPtr.Zero, out stamp, buf, ref sz) == 0 && sz >= 4)
+                {
+                    int val = BitConverter.ToInt32(buf, 0);
+                    if (val == 1) return true;
+                    if (val == 2 || val == 0) return false;
+                }
+            }
+            catch { }
+
+            try
+            {
+                SYSTEM_POWER_STATUS s;
+                if (GetSystemPowerStatus(out s) && s.SystemStatusFlag == 1) return true;
+            }
+            catch { }
+
             return false;
         }
 
@@ -10271,6 +10318,20 @@ namespace Nook
 
         public static void SetBatterySaver(bool enable)
         {
+            try
+            {
+                // Native Windows Energy Saver toggle via WNF
+                RtlPublishWnfStateData(WNF_PO_ENERGY_SAVER_OVERRIDE, IntPtr.Zero, BitConverter.GetBytes(enable ? 1 : 2), 4, IntPtr.Zero);
+            }
+            catch { }
+
+            try
+            {
+                // Set power overlay scheme (Best Power Efficiency vs Balanced)
+                PowerSetActiveOverlayScheme(enable ? GUID_MAX_POWER_SAVINGS : Guid.Empty);
+            }
+            catch { }
+
             ThreadPool.QueueUserWorkItem(_ =>
             {
                 try
@@ -10285,7 +10346,7 @@ namespace Nook
                         CreateNoWindow = true,
                         UseShellExecute = false
                     });
-                    if (p1 != null) p1.WaitForExit(1500);
+                    if (p1 != null) p1.WaitForExit(1000);
 
                     var p2 = Process.Start(new ProcessStartInfo
                     {
@@ -10294,7 +10355,7 @@ namespace Nook
                         CreateNoWindow = true,
                         UseShellExecute = false
                     });
-                    if (p2 != null) p2.WaitForExit(1500);
+                    if (p2 != null) p2.WaitForExit(1000);
                 }
                 catch { }
             });
