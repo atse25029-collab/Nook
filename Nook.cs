@@ -308,9 +308,9 @@ namespace Nook
         {
             { "Hardware", "Hardware" },
             { "Mit Google-Konto verbunden", "Connected to Google Account" },
-            { "Öffnen (Win+G)", "Open (Win+G)" },
-            { "Intelligenter KI-Assistent · Schnellzugriff mit Win+G von überall", "Smart AI Assistant · Quick access with Win+G anywhere" },
-            { "Frage an Gemini... (Enter öffnet Chat)", "Ask Gemini anything... (Enter opens chat)" },
+            { "\u00D6ffnen (Win+G)", "Open (Win+G)" },
+            { "Intelligenter KI-Assistent \u00B7 Schnellzugriff mit Win+G von \u00FCberall", "Smart AI assistant \u00B7 Quick access with Win+G anywhere" },
+            { "Frage an Gemini... (Enter \u00F6ffnet Chat)", "Ask Gemini anything... (Enter opens chat)" },
             { "Neuer Chat", "New Chat" },
             { "Frische Unterhaltung", "Fresh conversation" },
             { "Gemini Live", "Gemini Live" },
@@ -319,12 +319,12 @@ namespace Nook
             { "Tiefen-Analyse", "Deep analysis" },
             { "Chat-Verlauf", "Chat history" },
             { "Gespeicherte Chats", "Saved chats" },
-            { "Drücke jederzeit Win+G zum Ein- und Ausblenden", "Press Win+G anytime to toggle" },
+            { "Dr\u00FCcke jederzeit Win+G zum Ein- und Ausblenden", "Press Win+G anytime to toggle" },
             { "In Vollbild-Browsern anzeigen", "Show in fullscreen browsers" },
             { "Pille bleibt bei F11 im Browser sichtbar", "Pill stays visible during F11 in browser" },
-            { "Browser für Gemini", "Browser for Gemini" },
+            { "Browser f\u00FCr Gemini", "Browser for Gemini" },
             { "Nimmt gespeicherte Google-Anmeldung", "Uses saved Google account" },
-            { "Prompt kopiert – mit Strg+V einfügen", "Prompt copied – paste with Ctrl+V" },
+            { "Prompt kopiert \u2013 mit Strg+V einf\u00FCgen", "Prompt copied \u2013 paste with Ctrl+V" },
             { "Netzwerk", "Network" },
             { "Keine aktive Verbindung", "No active connection" },
             { "Grafikkarte aktiv", "Graphics active" },
@@ -7571,7 +7571,7 @@ namespace Nook
             if (!string.IsNullOrEmpty(prompt))
             {
                 try { Clipboard.SetText(prompt); } catch { }
-                if (app.Pill != null) app.Pill.Flash(Loc.Tr("Prompt kopiert â€“ mit Strg+V einfÃ¼gen"), 3, false);
+                if (app.Pill != null) app.Pill.Flash(Loc.Tr("Prompt kopiert \u2013 mit Strg+V einf\u00FCgen"), 3, false);
             }
 
             try
@@ -7632,7 +7632,7 @@ namespace Nook
             try
             {
                 Clipboard.SetText(prompt);
-                if (app.Pill != null) app.Pill.Flash(Loc.Tr("Prompt kopiert â€“ mit Strg+V einfÃ¼gen"), 3, false);
+                if (app.Pill != null) app.Pill.Flash(Loc.Tr("Prompt kopiert \u2013 mit Strg+V einf\u00FCgen"), 3, false);
             }
             catch { }
         }
@@ -7685,7 +7685,7 @@ namespace Nook
             var badgeSp = new StackPanel { Orientation = Orientation.Horizontal };
             var dot = new TextBlock
             {
-                Text = "â—",
+                Text = "\u25CF",
                 FontSize = 9,
                 Foreground = new SolidColorBrush(Color.FromRgb(52, 168, 83)), // Google Green
                 VerticalAlignment = VerticalAlignment.Center,
@@ -7701,7 +7701,7 @@ namespace Nook
 
             // Launch Button (Right)
             var launchBtn = new Btn(
-                U.T(Loc.Tr("Ã–ffnen (Win+G)"), 12.5, Th.AccentText, FontWeights.Bold),
+                U.T(Loc.Tr("\u00D6ffnen (Win+G)"), 12.5, Th.AccentText, FontWeights.Bold),
                 Th.Accent,
                 Th.AccentHover,
                 12,
@@ -7717,7 +7717,7 @@ namespace Nook
             mainStack.Children.Add(headerGrid);
 
             // Subtitle
-            var subTx = U.T(Loc.Tr("Intelligenter KI-Assistent Â· Schnellzugriff mit Win+G von Ã¼berall"), 12.5, Th.Muted);
+            var subTx = U.T(Loc.Tr("Intelligenter KI-Assistent \u00B7 Schnellzugriff mit Win+G von \u00FCberall"), 12.5, Th.Muted);
             subTx.Margin = new Thickness(32, 4, 0, 16);
             mainStack.Children.Add(subTx);
 
@@ -7742,7 +7742,7 @@ namespace Nook
                 VerticalContentAlignment = VerticalAlignment.Center
             };
 
-            var placeholder = U.T(Loc.Tr("Frage an Gemini... (Enter Ã¶ffnet Chat)"), 13.5, Th.Muted);
+            var placeholder = U.T(Loc.Tr("Frage an Gemini... (Enter \u00F6ffnet Chat)"), 13.5, Th.Muted);
             placeholder.IsHitTestVisible = false;
             placeholder.Margin = new Thickness(12, 8, 0, 0);
             placeholder.VerticalAlignment = VerticalAlignment.Center;
@@ -7823,7 +7823,7 @@ namespace Nook
             var capWin = MakeKeycap("Win");
             var capPlus = U.T("+", 12, Th.Muted, FontWeights.Bold); capPlus.Margin = new Thickness(4, 0, 4, 0); capPlus.VerticalAlignment = VerticalAlignment.Center;
             var capG = MakeKeycap("G");
-            var tipTx = U.T(Loc.Tr("DrÃ¼cke jederzeit Win+G zum Ein- und Ausblenden"), 12, Th.Muted);
+            var tipTx = U.T(Loc.Tr("Dr\u00FCcke jederzeit Win+G zum Ein- und Ausblenden"), 12, Th.Muted);
             tipTx.Margin = new Thickness(10, 0, 0, 0);
             tipTx.VerticalAlignment = VerticalAlignment.Center;
 
@@ -9488,6 +9488,7 @@ namespace Nook
             Section("pill", "Anzeige",
                 Row(Loc.Tr("Pille anzeigen"), Loc.Tr("Am Rand: nur ein Strich, Maus hin – Pille erscheint"), Seg("pill.mode", O("always:Immer", "lip:Am Rand", "hidden:Aus"), null)),
                 Row(Loc.Tr("Bei Vollbild ausblenden"), Loc.Tr("Spiele, Videos, F11"), Toggle("pill.hideInFullscreen", null)),
+                Row(Loc.Tr("In Vollbild-Browsern anzeigen"), Loc.Tr("Pille bleibt bei F11 im Browser sichtbar"), Toggle("pill.showInBrowserFullscreen", null)),
                 Row(Loc.Tr("Platz reservieren"), Loc.Tr("nur bei „Immer“: Fenster enden unter der Pille"), Toggle("pill.reserveSpace", null)));
             Section("pill", "Form",
                 Row(Loc.Tr("Höhe"), null, Slider("pill.height", 24, 48, 1, "px", false)),
