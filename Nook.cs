@@ -174,7 +174,7 @@ namespace Nook
               ""clickTab"": ""start"", ""wheel"": ""volume"", ""middleClick"": ""close"",
               ""lipWidth"": 72, ""lipThickness"": 4, ""lipHideMs"": 650,
               ""reserveSpace"": false, ""hideInFullscreen"": true },
-  ""panel"": { ""width"": 780, ""height"": 470, ""radius"": 24, ""borderWidth"": 0, ""shadow"": true, ""shadowStrength"": 0.45,
+  ""panel"": { ""width"": 840, ""height"": 470, ""radius"": 24, ""borderWidth"": 0, ""shadow"": true, ""shadowStrength"": 0.45,
               ""animStyle"": ""morph"", ""animationMs"": 240, ""closeOnBlur"": true, ""startTab"": ""last"",
               ""tabStyle"": ""pill"", ""tabIcons"": ""text"", ""tabAlign"": ""center"",
               ""showClock"": true, ""showHelpButton"": true, ""showMenuButton"": true },
@@ -4324,8 +4324,8 @@ namespace Nook
             var line = new Border { Height = 2.5, CornerRadius = new CornerRadius(1.25), Margin = new Thickness(6, 5, 6, 0), Background = Brushes.Transparent };
             var col = new StackPanel();
             col.Children.Add(sp); col.Children.Add(line);
-            var b = new Btn(col, Brushes.Transparent, Th.Surface, 15, new Thickness(mode == "icons" ? 12 : 14, 6, mode == "icons" ? 12 : 14, 6));
-            b.Margin = new Thickness(2, 0, 2, 0);
+            var b = new Btn(col, Brushes.Transparent, Th.Surface, 15, new Thickness(mode == "icons" ? 11 : 12, 5, mode == "icons" ? 11 : 12, 5));
+            b.Margin = new Thickness(1.5, 0, 1.5, 0);
             b.Tag = new object[] { sp, line };
             if (mode == "icons") b.ToolTip = title;
             return b;
@@ -4383,7 +4383,7 @@ namespace Nook
             var c = a.Cfg;
             var mon = a.MonitorDip();
             double k = Th.K;
-            W = Math.Min(Math.Max(520, c.D("panel.width", 780)), mon.Width / k - 2 * c.D("position.sideMargin", 16));
+            W = Math.Min(Math.Max(800, c.D("panel.width", 840)), mon.Width / k - 2 * c.D("position.sideMargin", 16));
             H = Math.Min(Math.Max(360, c.D("panel.height", 470)), mon.Height / k - 80);
 
             WindowStyle = WindowStyle.None; AllowsTransparency = true; Background = Brushes.Transparent;
@@ -4417,16 +4417,19 @@ namespace Nook
 
             // Tab-Leiste: links Uhrzeit, Mitte Tabs, rechts Hilfe + Menü
             bool tabsLeft = c.S("panel.tabAlign", "center") == "left";
-            var bar = barGrid = tabsLeft ? U.G(null, new[] { U.Auto, U.Star(1), U.Auto }) : U.G(null, new[] { U.Star(1), U.Auto, U.Star(1) });
-            bar.Margin = new Thickness(22, 16, 18, 14);
+            var bar = barGrid = U.G(null, new[] { U.Auto, U.Star(1), U.Auto });
+            bar.Margin = new Thickness(20, 16, 18, 14);
             tabSp = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = tabsLeft ? HorizontalAlignment.Left : HorizontalAlignment.Center };
             if (tabsLeft) tabSp.Margin = new Thickness(14, 0, 0, 0);
             U.Put(bar, tabSp, 0, 1);
             barClock = U.T("", 15, Th.Text, FontWeights.SemiBold);
             barDate = U.T("", 12.5, Th.Muted, FontWeights.SemiBold); barDate.Margin = new Thickness(8, 1, 0, 0);
-            var clockSp = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Center };
+            barClock.TextWrapping = TextWrapping.NoWrap;
+            barDate.TextWrapping = TextWrapping.NoWrap;
+            var clockSp = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Center, Cursor = Cursors.Hand };
             clockSp.Children.Add(barClock); clockSp.Children.Add(barDate);
             clockSp.Visibility = c.B("panel.showClock", true) ? Visibility.Visible : Visibility.Collapsed;
+            clockSp.MouseLeftButtonDown += (s, e) => { e.Handled = true; Select("today"); };
             U.Put(bar, clockSp, 0, 0);
             var right = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, VerticalAlignment = VerticalAlignment.Center };
             var helpBtn = U.IconBtn("\uE897", 32, 14, Brushes.Transparent, Th.Surface, Th.Muted);
@@ -4898,7 +4901,13 @@ namespace Nook
         {
             var now = DateTime.Now;
             barClock.Text = now.ToString(app.Cfg.B("pill.clock24h", true) ? "HH:mm" : "h:mm tt", Th.Cul);
-            barDate.Text = now.ToString(Loc.En ? "ddd, MMM d" : "ddd, d. MMM", Th.Cul);
+            string df = app.Cfg.S("pill.dateFormat", "short");
+            if (df == "long")
+                barDate.Text = now.ToString(Loc.En ? "dddd, MMMM d, yyyy" : "dddd, d. MMMM yyyy", Th.Cul);
+            else if (df == "numeric")
+                barDate.Text = now.ToString(Loc.En ? "MM/dd/yyyy" : "dd.MM.yyyy", Th.Cul);
+            else
+                barDate.Text = now.ToString(Loc.En ? "ddd, MMM d, yyyy" : "ddd, d. MMM yyyy", Th.Cul);
         }
 
         public void Tick()
@@ -9313,7 +9322,7 @@ namespace Nook
 
         UIElement BuildStage(Cfg c)
         {
-            double pw = c.D("panel.width", 780), ph = c.D("panel.height", 470);
+            double pw = c.D("panel.width", 840), ph = c.D("panel.height", 470);
             bool bottom = c.S("position.edge", "top") == "bottom";
             string align = c.S("position.align", "center");
             double off = c.D("position.offset", 8), side = c.D("position.sideMargin", 16);
