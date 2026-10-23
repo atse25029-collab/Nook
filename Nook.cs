@@ -2474,24 +2474,144 @@ namespace Nook
     {
         public List<AppEntry> All = new List<AppEntry>();
         public event Action Loaded;
+        public DateTime LastLoaded = DateTime.MinValue;
+        readonly List<FileSystemWatcher> watchers = new List<FileSystemWatcher>();
+        DispatcherTimer watcherTimer;
+        bool hideUninstallersSetting = true;
 
         public void Load(bool hideUninstallers)
         {
-            var disp = Application.Current.Dispatcher;
+            hideUninstallersSetting = hideUninstallers;
+            var disp = Application.Current != null ? Application.Current.Dispatcher : Dispatcher.CurrentDispatcher;
             var th = new Thread(() =>
             {
-                List<AppEntry> l = null;
-                try { l = FromShell(); } catch { }
-                if (l == null || l.Count == 0) { try { l = FromStartMenu(); } catch { l = new List<AppEntry>(); } }
+                var map = new Dictionary<string, AppEntry>(StringComparer.OrdinalIgnoreCase);
+
+                // 1. Shell apps (UWP, Store, Windows system apps)
+                try
+                {
+                    foreach (var a in FromShell())
+                    {
+                        if (!map.ContainsKey(a.Name)) map[a.Name] = a;
+                    }
+                }
+                catch { }
+
+                // 2. Start Menu shortcuts
+                try
+                {
+                    foreach (var a in FromStartMenu())
+                    {
+                        if (!map.ContainsKey(a.Name)) map[a.Name] = a;
+                    }
+                }
+                catch { }
+
+                // 3. Desktop shortcuts
+                try
+                {
+                    foreach (var a in FromDesktop())
+                    {
+                        if (!map.ContainsKey(a.Name)) map[a.Name] = a;
+                    }
+                }
+                catch { }
+
+                // 4. Registry Uninstall Apps (installed programs across C: drive)
+                try
+                {
+                    foreach (var a in FromRegistry())
+                    {
+                        if (!map.ContainsKey(a.Name)) map[a.Name] = a;
+                    }
+                }
+                catch { }
+
+                // 5. Common Program Directories (C:\Program Files, C:\Program Files (x86), AppData\Local\Programs)
+                try
+                {
+                    foreach (var a in FromCommonProgramDirs())
+                    {
+                        if (!map.ContainsKey(a.Name)) map[a.Name] = a;
+                    }
+                }
+                catch { }
+
+                var l = map.Values.ToList();
                 if (hideUninstallers)
                     l = l.Where(a => { var n = a.Name.ToLowerInvariant(); return !n.Contains("uninstall") && !n.Contains("deinstall"); }).ToList();
-                l = l.GroupBy(a => a.Name.ToLowerInvariant()).Select(g => g.First())
-                     .OrderBy(a => a.Name, StringComparer.CurrentCultureIgnoreCase).ToList();
+
+                l = l.OrderBy(a => a.Name, StringComparer.CurrentCultureIgnoreCase).ToList();
+                LastLoaded = DateTime.Now;
                 disp.BeginInvoke(new Action(() => { All = l; if (Loaded != null) Loaded(); }));
             });
             th.SetApartmentState(ApartmentState.STA);
             th.IsBackground = true;
             th.Start();
+
+            InitWatchers();
+        }
+
+        void InitWatchers()
+        {
+            if (watchers.Count > 0) return;
+            var dirs = new[]
+            {
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonStartMenu), "Programs"),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.StartMenu), "Programs"),
+                Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory),
+                Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory)
+            };
+
+            foreach (var d in dirs)
+            {
+                if (!Directory.Exists(d)) continue;
+                try
+                {
+                    var w = new FileSystemWatcher(d)
+                    {
+                        IncludeSubdirectories = true,
+                        NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite,
+                        EnableRaisingEvents = true
+                    };
+                    FileSystemEventHandler onChg = (s, e) => TriggerReload();
+                    RenamedEventHandler onRen = (s, e) => TriggerReload();
+                    w.Created += onChg;
+                    w.Deleted += onChg;
+                    w.Changed += onChg;
+                    w.Renamed += onRen;
+                    watchers.Add(w);
+                }
+                catch { }
+            }
+        }
+
+        void TriggerReload()
+        {
+            if (Application.Current == null) return;
+            Application.Current.Dispatcher.BeginInvoke(new Action(() =>
+            {
+                if (watcherTimer == null)
+                {
+                    watcherTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(800) };
+                    watcherTimer.Tick += (s, e) =>
+                    {
+                        watcherTimer.Stop();
+                        Load(hideUninstallersSetting);
+                    };
+                }
+                watcherTimer.Stop();
+                watcherTimer.Start();
+            }));
+        }
+
+        public static string CleanName(string raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw)) return "";
+            string s = Regex.Replace(raw, @"\s+version\s+[\d\.]+", "", RegexOptions.IgnoreCase);
+            s = Regex.Replace(s, @"\s+v[\d\.]+", "", RegexOptions.IgnoreCase);
+            s = Regex.Replace(s, @"\s+\(x86\)|\s+\(x64\)|\s+\(32-bit\)|\s+\(64-bit\)", "", RegexOptions.IgnoreCase);
+            return s.Trim();
         }
 
         static object Call(object o, string name, BindingFlags f, params object[] args)
@@ -2542,8 +2662,182 @@ namespace Nook
             foreach (var d in dirs)
             {
                 if (!Directory.Exists(d)) continue;
-                foreach (var f in Directory.EnumerateFiles(d, "*.lnk", SearchOption.AllDirectories))
-                    list.Add(new AppEntry { Name = Path.GetFileNameWithoutExtension(f), Parse = f, Kind = "Anwendung" });
+                try
+                {
+                    foreach (var f in Directory.EnumerateFiles(d, "*.lnk", SearchOption.AllDirectories))
+                        list.Add(new AppEntry { Name = Path.GetFileNameWithoutExtension(f), Parse = f, Kind = "Anwendung", Shell = false });
+                }
+                catch { }
+            }
+            return list;
+        }
+
+        static List<AppEntry> FromDesktop()
+        {
+            var list = new List<AppEntry>();
+            var dirs = new[]
+            {
+                Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory),
+                Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory)
+            };
+            foreach (var d in dirs)
+            {
+                if (!Directory.Exists(d)) continue;
+                try
+                {
+                    foreach (var f in Directory.EnumerateFiles(d, "*.lnk", SearchOption.TopDirectoryOnly))
+                        list.Add(new AppEntry { Name = Path.GetFileNameWithoutExtension(f), Parse = f, Kind = "Anwendung", Shell = false });
+                }
+                catch { }
+            }
+            return list;
+        }
+
+        static List<AppEntry> FromRegistry()
+        {
+            var list = new List<AppEntry>();
+            var regRoots = new[]
+            {
+                Tuple.Create(Registry.LocalMachine, @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
+                Tuple.Create(Registry.LocalMachine, @"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"),
+                Tuple.Create(Registry.CurrentUser, @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall")
+            };
+
+            foreach (var tuple in regRoots)
+            {
+                try
+                {
+                    using (var root = tuple.Item1.OpenSubKey(tuple.Item2))
+                    {
+                        if (root == null) continue;
+                        foreach (var kName in root.GetSubKeyNames())
+                        {
+                            try
+                            {
+                                using (var sk = root.OpenSubKey(kName))
+                                {
+                                    if (sk == null) continue;
+                                    string dn = sk.GetValue("DisplayName") as string;
+                                    if (string.IsNullOrWhiteSpace(dn)) continue;
+                                    string clean = CleanName(dn);
+
+                                    string exe = null;
+                                    string icon = sk.GetValue("DisplayIcon") as string;
+                                    if (!string.IsNullOrWhiteSpace(icon))
+                                    {
+                                        string p = icon.Split(',')[0].Trim('\"', ' ');
+                                        if (p.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) && File.Exists(p))
+                                            exe = p;
+                                    }
+
+                                    if (string.IsNullOrEmpty(exe))
+                                    {
+                                        string loc = sk.GetValue("InstallLocation") as string;
+                                        if (!string.IsNullOrWhiteSpace(loc) && Directory.Exists(loc))
+                                        {
+                                            try
+                                            {
+                                                foreach (var f in Directory.EnumerateFiles(loc, "*.exe", SearchOption.TopDirectoryOnly))
+                                                {
+                                                    string fn = Path.GetFileName(f).ToLowerInvariant();
+                                                    if (!fn.Contains("unins") && !fn.Contains("setup") && !fn.Contains("update"))
+                                                    {
+                                                        exe = f;
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                            catch { }
+                                        }
+                                    }
+
+                                    if (!string.IsNullOrEmpty(exe))
+                                    {
+                                        list.Add(new AppEntry { Name = clean, Parse = exe, Kind = "Anwendung", Shell = false });
+                                    }
+                                }
+                            }
+                            catch { }
+                        }
+                    }
+                }
+                catch { }
+            }
+            return list;
+        }
+
+        static List<AppEntry> FromCommonProgramDirs()
+        {
+            var list = new List<AppEntry>();
+            var pfDirs = new[]
+            {
+                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs")
+            };
+
+            foreach (var pf in pfDirs)
+            {
+                if (!Directory.Exists(pf)) continue;
+                try
+                {
+                    foreach (var dir in Directory.EnumerateDirectories(pf, "*", SearchOption.TopDirectoryOnly))
+                    {
+                        string dirName = Path.GetFileName(dir);
+                        try
+                        {
+                            foreach (var exe in Directory.EnumerateFiles(dir, "*.exe", SearchOption.TopDirectoryOnly))
+                            {
+                                string fn = Path.GetFileName(exe).ToLowerInvariant();
+                                if (!fn.Contains("unins") && !fn.Contains("setup") && !fn.Contains("update") && !fn.Contains("crash"))
+                                {
+                                    list.Add(new AppEntry { Name = dirName, Parse = exe, Kind = "Anwendung", Shell = false });
+                                    break;
+                                }
+                            }
+                        }
+                        catch { }
+                    }
+                }
+                catch { }
+            }
+            return list;
+        }
+
+        public static List<AppEntry> SearchDirectories(string q)
+        {
+            var list = new List<AppEntry>();
+            if (string.IsNullOrWhiteSpace(q) || q.Length < 2) return list;
+            var pfDirs = new[]
+            {
+                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs")
+            };
+            foreach (var pf in pfDirs)
+            {
+                if (!Directory.Exists(pf)) continue;
+                try
+                {
+                    foreach (var dir in Directory.EnumerateDirectories(pf, "*" + q + "*", SearchOption.TopDirectoryOnly))
+                    {
+                        string dirName = Path.GetFileName(dir);
+                        try
+                        {
+                            foreach (var exe in Directory.EnumerateFiles(dir, "*.exe", SearchOption.TopDirectoryOnly))
+                            {
+                                string fn = Path.GetFileName(exe).ToLowerInvariant();
+                                if (!fn.Contains("unins") && !fn.Contains("setup") && !fn.Contains("update"))
+                                {
+                                    list.Add(new AppEntry { Name = dirName, Parse = exe, Kind = "Anwendung", Shell = false });
+                                    break;
+                                }
+                            }
+                        }
+                        catch { }
+                    }
+                }
+                catch { }
             }
             return list;
         }
@@ -2583,7 +2877,6 @@ namespace Nook
             return -1;
         }
     }
-
     // -----------------------------------------------------------------
     //  Zwischenablage-Verlauf
     // -----------------------------------------------------------------
@@ -6283,6 +6576,10 @@ namespace Nook
 
         public override void Shown()
         {
+            if (App != null && App.Apps != null && ((DateTime.Now - App.Apps.LastLoaded).TotalSeconds > 15 || App.Apps.All.Count == 0))
+            {
+                App.Apps.Load(App.Cfg.B("apps.hideUninstallers", true));
+            }
             if (sb.Tb.Text.Length == 0) Rebuild();
             FocusMain();
         }
@@ -6378,6 +6675,17 @@ namespace Nook
                 if (Calc.TryEval(sb.Tb.Text, out r)) AddCalc(r);
                 var hits = all.Select(a => new { a, s = AppIndex.Score(a.Name, q) + (starred.Contains(a.Parse) ? 50 : 0) })
                               .Where(x => x.s > 0).OrderByDescending(x => x.s).Take(30).Select(x => x.a).ToList();
+                if (q.Length >= 2)
+                {
+                    var extra = AppIndex.SearchDirectories(q);
+                    foreach (var ex in extra)
+                    {
+                        if (!hits.Any(h => h.Name.Equals(ex.Name, StringComparison.OrdinalIgnoreCase) || h.Parse.Equals(ex.Parse, StringComparison.OrdinalIgnoreCase)))
+                        {
+                            hits.Add(ex);
+                        }
+                    }
+                }
                 foreach (var a in hits) AddApp(a);
                 AddWeb(sb.Tb.Text.Trim());
             }
