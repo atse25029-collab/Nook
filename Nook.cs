@@ -1742,6 +1742,30 @@ namespace Nook
             return list;
         }
 
+        public static List<AudioDevice> AllOutputs()
+        {
+            var list = new List<AudioDevice>();
+            try
+            {
+                string def = null;
+                var dd = Dev(0);
+                if (dd != null) dd.GetId(out def);
+                IMMDeviceCollection col;
+                // 0xF = DEVICE_STATEMASK_ALL (Active, Disabled, NotPresent, Unplugged)
+                if (En().EnumAudioEndpoints(0, 0xF, out col) != 0 || col == null) return list;
+                uint n; col.GetCount(out n);
+                for (uint i = 0; i < n; i++)
+                {
+                    IMMDevice d;
+                    if (col.Item(i, out d) != 0 || d == null) continue;
+                    string id; d.GetId(out id);
+                    list.Add(new AudioDevice { Id = id, Name = NameOf(d, false) ?? id, IsDefault = id == def });
+                }
+            }
+            catch (Exception ex) { NookApp.Log(ex); }
+            return list;
+        }
+
         public static bool SetDefaultOutput(string id)
         {
             try
@@ -10918,6 +10942,56 @@ namespace Nook
 
     public static class WifiManager
     {
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        public struct WLAN_INTERFACE_INFO
+        {
+            public Guid InterfaceGuid;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)]
+            public string strInterfaceDescription;
+            public int isState;
+        }
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        public struct WLAN_PROFILE_INFO
+        {
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)]
+            public string strProfileName;
+            public uint dwFlags;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct WLAN_CONNECTION_PARAMETERS
+        {
+            public int wlanConnectionMode;
+            [MarshalAs(UnmanagedType.LPWStr)]
+            public string strProfile;
+            public IntPtr pDot11Ssid;
+            public IntPtr pDesiredBssidList;
+            public int dot11BssType;
+            public uint dwFlags;
+        }
+
+        [DllImport("wlanapi.dll")]
+        public static extern int WlanOpenHandle(uint dwClientVersion, IntPtr pReserved, out uint pdwNegotiatedVersion, out IntPtr phClientHandle);
+
+        [DllImport("wlanapi.dll")]
+        public static extern int WlanCloseHandle(IntPtr hClientHandle, IntPtr pReserved);
+
+        [DllImport("wlanapi.dll")]
+        public static extern int WlanEnumInterfaces(IntPtr hClientHandle, IntPtr pReserved, out IntPtr ppInterfaceList);
+
+        [DllImport("wlanapi.dll")]
+        public static extern int WlanGetProfileList(IntPtr hClientHandle, ref Guid pInterfaceGuid, IntPtr pReserved, out IntPtr ppProfileList);
+
+        [DllImport("wlanapi.dll")]
+        public static extern int WlanConnect(IntPtr hClientHandle, ref Guid pInterfaceGuid, ref WLAN_CONNECTION_PARAMETERS pConnectionParameters, IntPtr pReserved);
+
+        [DllImport("wlanapi.dll")]
+        public static extern int WlanDisconnect(IntPtr hClientHandle, ref Guid pInterfaceGuid, IntPtr pReserved);
+
+        [DllImport("wlanapi.dll")]
+        public static extern void WlanFreeMemory(IntPtr pMemory);
+
         public static bool IsWifiOn()
         {
 #if WINRT
@@ -11007,32 +11081,135 @@ namespace Nook
         public static List<string> GetKnownNetworks()
         {
             var list = new List<string>();
+            IntPtr handle = IntPtr.Zero;
             try
             {
-                var psi = new ProcessStartInfo("netsh", "wlan show profiles")
+                uint neg;
+                if (WlanOpenHandle(2, IntPtr.Zero, out neg, out handle) == 0 && handle != IntPtr.Zero)
                 {
-                    UseShellExecute = false, RedirectStandardOutput = true, CreateNoWindow = true,
-                    StandardOutputEncoding = Encoding.GetEncoding(CultureInfo.CurrentCulture.TextInfo.OEMCodePage)
-                };
-                using (var p = Process.Start(psi))
-                {
-                    string o = p.StandardOutput.ReadToEnd();
-                    p.WaitForExit(3000);
-                    foreach (Match m in Regex.Matches(o, @":\s*(.+?)\s*$", RegexOptions.Multiline))
+                    IntPtr ifListPtr;
+                    if (WlanEnumInterfaces(handle, IntPtr.Zero, out ifListPtr) == 0 && ifListPtr != IntPtr.Zero)
                     {
-                        string s = m.Groups[1].Value.Trim();
-                        if (!string.IsNullOrEmpty(s) && s != "<None>" && !list.Contains(s))
-                            list.Add(s);
+                        try
+                        {
+                            int count = Marshal.ReadInt32(ifListPtr);
+                            IntPtr cur = new IntPtr(ifListPtr.ToInt64() + 8);
+                            for (int i = 0; i < count; i++)
+                            {
+                                var info = (WLAN_INTERFACE_INFO)Marshal.PtrToStructure(cur, typeof(WLAN_INTERFACE_INFO));
+                                IntPtr profListPtr;
+                                if (WlanGetProfileList(handle, ref info.InterfaceGuid, IntPtr.Zero, out profListPtr) == 0 && profListPtr != IntPtr.Zero)
+                                {
+                                    try
+                                    {
+                                        int pCount = Marshal.ReadInt32(profListPtr);
+                                        IntPtr pCur = new IntPtr(profListPtr.ToInt64() + 8);
+                                        for (int j = 0; j < pCount; j++)
+                                        {
+                                            var pInfo = (WLAN_PROFILE_INFO)Marshal.PtrToStructure(pCur, typeof(WLAN_PROFILE_INFO));
+                                            if (!string.IsNullOrEmpty(pInfo.strProfileName) && !list.Contains(pInfo.strProfileName))
+                                                list.Add(pInfo.strProfileName);
+                                            pCur = new IntPtr(pCur.ToInt64() + Marshal.SizeOf(typeof(WLAN_PROFILE_INFO)));
+                                        }
+                                    }
+                                    finally
+                                    {
+                                        WlanFreeMemory(profListPtr);
+                                    }
+                                }
+                                cur = new IntPtr(cur.ToInt64() + Marshal.SizeOf(typeof(WLAN_INTERFACE_INFO)));
+                            }
+                        }
+                        finally
+                        {
+                            WlanFreeMemory(ifListPtr);
+                        }
                     }
                 }
             }
             catch { }
+            finally
+            {
+                if (handle != IntPtr.Zero) WlanCloseHandle(handle, IntPtr.Zero);
+            }
+
+            if (list.Count == 0)
+            {
+                try
+                {
+                    var psi = new ProcessStartInfo("netsh", "wlan show profiles")
+                    {
+                        UseShellExecute = false, RedirectStandardOutput = true, CreateNoWindow = true,
+                        StandardOutputEncoding = Encoding.GetEncoding(CultureInfo.CurrentCulture.TextInfo.OEMCodePage)
+                    };
+                    using (var p = Process.Start(psi))
+                    {
+                        string o = p.StandardOutput.ReadToEnd();
+                        p.WaitForExit(3000);
+                        foreach (Match m in Regex.Matches(o, @":\s*(.+?)\s*$", RegexOptions.Multiline))
+                        {
+                            string s = m.Groups[1].Value.Trim();
+                            if (!string.IsNullOrEmpty(s) && s != "<None>" && !list.Contains(s))
+                                list.Add(s);
+                        }
+                    }
+                }
+                catch { }
+            }
             return list;
         }
 
-        public static void Connect(string ssid)
+        public static bool Connect(string ssid)
         {
-            ThreadPool.QueueUserWorkItem(_ =>
+            if (string.IsNullOrEmpty(ssid)) return false;
+            bool ok = false;
+            IntPtr handle = IntPtr.Zero;
+            try
+            {
+                uint neg;
+                if (WlanOpenHandle(2, IntPtr.Zero, out neg, out handle) == 0 && handle != IntPtr.Zero)
+                {
+                    IntPtr ifListPtr;
+                    if (WlanEnumInterfaces(handle, IntPtr.Zero, out ifListPtr) == 0 && ifListPtr != IntPtr.Zero)
+                    {
+                        try
+                        {
+                            int count = Marshal.ReadInt32(ifListPtr);
+                            IntPtr cur = new IntPtr(ifListPtr.ToInt64() + 8);
+                            for (int i = 0; i < count; i++)
+                            {
+                                var info = (WLAN_INTERFACE_INFO)Marshal.PtrToStructure(cur, typeof(WLAN_INTERFACE_INFO));
+                                var cp = new WLAN_CONNECTION_PARAMETERS
+                                {
+                                    wlanConnectionMode = 0, // wlan_connection_mode_profile
+                                    strProfile = ssid,
+                                    pDot11Ssid = IntPtr.Zero,
+                                    pDesiredBssidList = IntPtr.Zero,
+                                    dot11BssType = 3, // any
+                                    dwFlags = 0
+                                };
+                                int res = WlanConnect(handle, ref info.InterfaceGuid, ref cp, IntPtr.Zero);
+                                if (res == 0) ok = true;
+                                cur = new IntPtr(cur.ToInt64() + Marshal.SizeOf(typeof(WLAN_INTERFACE_INFO)));
+                            }
+                        }
+                        finally
+                        {
+                            WlanFreeMemory(ifListPtr);
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                NookApp.Log(ex);
+            }
+            finally
+            {
+                if (handle != IntPtr.Zero) WlanCloseHandle(handle, IntPtr.Zero);
+            }
+
+            if (!ok)
             {
                 try
                 {
@@ -11040,26 +11217,57 @@ namespace Nook
                     {
                         UseShellExecute = false, CreateNoWindow = true
                     };
-                    using (var p = Process.Start(psi)) p.WaitForExit(4000);
+                    using (var p = Process.Start(psi)) p.WaitForExit(3000);
                 }
                 catch { }
-            });
+            }
+            return ok;
         }
 
         public static void Disconnect()
         {
-            ThreadPool.QueueUserWorkItem(_ =>
+            IntPtr handle = IntPtr.Zero;
+            try
             {
-                try
+                uint neg;
+                if (WlanOpenHandle(2, IntPtr.Zero, out neg, out handle) == 0 && handle != IntPtr.Zero)
                 {
-                    var psi = new ProcessStartInfo("netsh", "wlan disconnect")
+                    IntPtr ifListPtr;
+                    if (WlanEnumInterfaces(handle, IntPtr.Zero, out ifListPtr) == 0 && ifListPtr != IntPtr.Zero)
                     {
-                        UseShellExecute = false, CreateNoWindow = true
-                    };
-                    using (var p = Process.Start(psi)) p.WaitForExit(3000);
+                        try
+                        {
+                            int count = Marshal.ReadInt32(ifListPtr);
+                            IntPtr cur = new IntPtr(ifListPtr.ToInt64() + 8);
+                            for (int i = 0; i < count; i++)
+                            {
+                                var info = (WLAN_INTERFACE_INFO)Marshal.PtrToStructure(cur, typeof(WLAN_INTERFACE_INFO));
+                                WlanDisconnect(handle, ref info.InterfaceGuid, IntPtr.Zero);
+                                cur = new IntPtr(cur.ToInt64() + Marshal.SizeOf(typeof(WLAN_INTERFACE_INFO)));
+                            }
+                        }
+                        finally
+                        {
+                            WlanFreeMemory(ifListPtr);
+                        }
+                    }
                 }
-                catch { }
-            });
+            }
+            catch { }
+            finally
+            {
+                if (handle != IntPtr.Zero) WlanCloseHandle(handle, IntPtr.Zero);
+            }
+
+            try
+            {
+                var psi = new ProcessStartInfo("netsh", "wlan disconnect")
+                {
+                    UseShellExecute = false, CreateNoWindow = true
+                };
+                using (var p = Process.Start(psi)) p.WaitForExit(2000);
+            }
+            catch { }
         }
     }
 
@@ -11070,6 +11278,7 @@ namespace Nook
     {
         public string Id;
         public string Name;
+        public ulong Address;
         public bool IsConnected;
         public string Glyph;
     }
@@ -11123,29 +11332,34 @@ namespace Nook
                 foreach (var d in devices)
                 {
                     bool isConn = false;
+                    ulong addr = 0;
                     try
                     {
                         var dev = U.AwaitWinRT(WinBt.BluetoothDevice.FromIdAsync(d.Id));
                         if (dev != null)
+                        {
                             isConn = dev.ConnectionStatus == WinBt.BluetoothConnectionStatus.Connected;
+                            addr = dev.BluetoothAddress;
+                        }
                     }
                     catch { }
 
-                    string glyph = ""; // Bluetooth icon
+                    string glyph = "\uE702"; // Bluetooth icon
                     string lower = (d.Name ?? "").ToLowerInvariant();
-                    if (lower.Contains("head") || lower.Contains("airpod") || lower.Contains("ear") || lower.Contains("buds") || lower.Contains("wh-") || lower.Contains("sound") || lower.Contains("audio") || lower.Contains("speaker") || lower.Contains("kraken"))
-                        glyph = ""; // Audio / headset icon
+                    if (lower.Contains("head") || lower.Contains("airpod") || lower.Contains("ear") || lower.Contains("buds") || lower.Contains("wh-") || lower.Contains("sound") || lower.Contains("audio") || lower.Contains("speaker") || lower.Contains("kraken") || lower.Contains("harmonix"))
+                        glyph = "\uE7F5"; // Audio / headset icon
                     else if (lower.Contains("controller") || lower.Contains("xbox") || lower.Contains("gamepad") || lower.Contains("dualshock") || lower.Contains("dualsense"))
-                        glyph = ""; // Game controller icon
+                        glyph = "\uE7FC"; // Game controller icon
                     else if (lower.Contains("mouse") || lower.Contains("maus"))
-                        glyph = ""; // Mouse
+                        glyph = "\uE765"; // Mouse
                     else if (lower.Contains("keyboard") || lower.Contains("tastatur"))
-                        glyph = ""; // Keyboard
+                        glyph = "\uE92E"; // Keyboard
 
                     list.Add(new BtDevice
                     {
                         Id = d.Id,
                         Name = d.Name,
+                        Address = addr,
                         IsConnected = isConn,
                         Glyph = glyph
                     });
@@ -11165,8 +11379,93 @@ namespace Nook
             }
             return null;
         }
-    }
 
+        public static void ConnectDevice(BtDevice d, Action<bool> onComplete = null)
+        {
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                bool connected = false;
+                try
+                {
+                    if (!IsBluetoothOn())
+                    {
+                        SetBluetoothOn(true);
+                        Thread.Sleep(500);
+                    }
+
+                    // 1. If audio device, find matching audio endpoint (even if unplugged) and set as default
+                    var outs = Audio.AllOutputs();
+                    var match = outs.FirstOrDefault(o => o.Name.IndexOf(d.Name, StringComparison.OrdinalIgnoreCase) >= 0 || d.Name.IndexOf(o.Name, StringComparison.OrdinalIgnoreCase) >= 0);
+                    if (match != null)
+                    {
+                        Audio.SetDefaultOutput(match.Id);
+                    }
+
+#if WINRT
+                    // 2. WinRT connection triggers: query uncached RFCOMM services to force physical link connection
+                    try
+                    {
+                        var dev = U.AwaitWinRT(WinBt.BluetoothDevice.FromIdAsync(d.Id));
+                        if (dev != null)
+                        {
+                            U.AwaitWinRT(dev.GetRfcommServicesAsync(WinBt.BluetoothCacheMode.Uncached));
+                        }
+                    }
+                    catch { }
+
+                    // 3. Try as BLE device if applicable
+                    try
+                    {
+                        var ble = U.AwaitWinRT(WinBt.BluetoothLEDevice.FromIdAsync(d.Id));
+                        if (ble != null)
+                        {
+                            U.AwaitWinRT(ble.GetGattServicesAsync(WinBt.BluetoothCacheMode.Uncached));
+                        }
+                    }
+                    catch { }
+#endif
+
+                    Thread.Sleep(1400);
+                    var updated = GetPairedDevices();
+                    var check = updated.FirstOrDefault(x => x.Id == d.Id || x.Name == d.Name);
+                    connected = check != null && check.IsConnected;
+                }
+                catch (Exception ex)
+                {
+                    NookApp.Log(ex);
+                }
+
+                if (onComplete != null && Application.Current != null)
+                {
+                    Application.Current.Dispatcher.BeginInvoke(new Action(() => onComplete(connected)));
+                }
+            });
+        }
+
+        public static void DisconnectDevice(BtDevice d, Action onComplete = null)
+        {
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                try
+                {
+                    // Reset default output to internal/built-in speakers
+                    var outs = Audio.Outputs();
+                    var internalSpeaker = outs.FirstOrDefault(o => o.Name.IndexOf("Realtek", StringComparison.OrdinalIgnoreCase) >= 0 || o.Name.IndexOf("Speakers", StringComparison.OrdinalIgnoreCase) >= 0);
+                    if (internalSpeaker != null)
+                    {
+                        Audio.SetDefaultOutput(internalSpeaker.Id);
+                    }
+                }
+                catch { }
+
+                Thread.Sleep(500);
+                if (onComplete != null && Application.Current != null)
+                {
+                    Application.Current.Dispatcher.BeginInvoke(new Action(onComplete));
+                }
+            });
+        }
+    }
     // =================================================================
     //  WifiFlyout – In-Place WLAN Menü
     // =================================================================
@@ -11346,23 +11645,30 @@ namespace Nook
                     {
                         var net = net0;
                         var g = U.G(null, new[] { U.Px(28), U.Star(1), U.Auto });
-                        U.Put(g, U.I("", 14, Th.Muted), 0, 0);
+                        U.Put(g, U.I("\uE701", 14, Th.Muted), 0, 0);
                         var t = U.T(net, 13, Th.Text, FontWeights.Normal);
-                        t.MaxWidth = 270;
+                        t.MaxWidth = 240;
                         U.Put(g, t, 0, 1);
-                        var connIcon = U.I("", 10, Th.Muted);
-                        U.Put(g, connIcon, 0, 2);
+                        var connBtn = new Btn(U.T(Loc.Tr("Verbinden"), 11.5, Th.AccentText, FontWeights.SemiBold), Th.Accent, Th.AccentHover, 6, new Thickness(8, 4, 8, 4));
                         Action pick = () =>
                         {
-                            WifiManager.Connect(net);
-                            app.Pill.Flash(Loc.Tr("Verbinde mit ") + net + "…", 2, false);
-                            if (refreshParent != null) refreshParent();
+                            app.Pill.Flash(Loc.Tr("Verbinde mit ") + net + "\u2026", 3, false);
                             ThreadPool.QueueUserWorkItem(_ =>
                             {
-                                Thread.Sleep(1500);
-                                app.Dispatcher.BeginInvoke(new Action(() => { Build(); if (refreshParent != null) refreshParent(); }));
+                                bool ok = WifiManager.Connect(net);
+                                Thread.Sleep(1200);
+                                app.Dispatcher.BeginInvoke(new Action(() =>
+                                {
+                                    Build();
+                                    if (refreshParent != null) refreshParent();
+                                    string cur = WifiManager.GetConnectedSsid();
+                                    if (cur == net || ok)
+                                        app.Pill.Flash(net + ": " + Loc.Tr("Verbunden"), 2, false);
+                                }));
                             });
                         };
+                        connBtn.Click += pick;
+                        U.Put(g, connBtn, 0, 2);
                         AddRow(g, pick, k => { if (k == 0) pick(); });
                     }
                 }
@@ -11584,26 +11890,69 @@ namespace Nook
                         U.Put(g, U.I(d.Glyph, 14, d.IsConnected ? Th.Accent : Th.Muted), 0, 0);
                         var spDev = new StackPanel();
                         var t = U.T(d.Name, 13.5, d.IsConnected ? Th.Text : Th.Muted, d.IsConnected ? FontWeights.SemiBold : FontWeights.Normal);
-                        t.MaxWidth = 250;
+                        t.MaxWidth = 230;
                         spDev.Children.Add(t);
                         var sub = U.T(d.IsConnected ? Loc.Tr("Verbunden") : Loc.Tr("Gekoppelt"), 11, d.IsConnected ? Th.Accent : Th.Muted);
                         spDev.Children.Add(sub);
                         U.Put(g, spDev, 0, 1);
+
                         if (d.IsConnected)
-                            U.Put(g, U.I("", 12, Th.Accent), 0, 2);
+                        {
+                            var rightPanel = new StackPanel { Orientation = Orientation.Horizontal };
+                            var checkIcon = U.I("\uE73E", 12, Th.Accent);
+                            checkIcon.VerticalAlignment = VerticalAlignment.Center;
+                            rightPanel.Children.Add(checkIcon);
+                            var discBtn = new Btn(U.T(Loc.Tr("Trennen"), 11.5, Th.Accent, FontWeights.SemiBold), Th.Surface2, Th.Hover, 6, new Thickness(8, 4, 8, 4));
+                            discBtn.Margin = new Thickness(8, 0, 0, 0);
+                            discBtn.Click += () =>
+                            {
+                                app.Pill.Flash(d.Name + ": " + Loc.Tr("Trennen") + "\u2026", 2, false);
+                                BluetoothManager.DisconnectDevice(d, () =>
+                                {
+                                    Build();
+                                    if (refreshParent != null) refreshParent();
+                                });
+                            };
+                            rightPanel.Children.Add(discBtn);
+                            U.Put(g, rightPanel, 0, 2);
+                        }
+                        else
+                        {
+                            var connBtn = new Btn(U.T(Loc.Tr("Verbinden"), 11.5, Th.AccentText, FontWeights.SemiBold), Th.Accent, Th.AccentHover, 6, new Thickness(8, 4, 8, 4));
+                            connBtn.Click += () =>
+                            {
+                                app.Pill.Flash(Loc.Tr("Verbinde mit ") + d.Name + "\u2026", 2, false);
+                                BluetoothManager.ConnectDevice(d, success =>
+                                {
+                                    app.Pill.Flash(d.Name + ": " + (success ? Loc.Tr("Verbunden") : Loc.Tr("Nicht verbunden")), 2, false);
+                                    Build();
+                                    if (refreshParent != null) refreshParent();
+                                });
+                            };
+                            U.Put(g, connBtn, 0, 2);
+                        }
 
                         Action pick = () =>
                         {
-                            var outputs = Audio.Outputs();
-                            var match = outputs.FirstOrDefault(o => o.Name.IndexOf(d.Name, StringComparison.OrdinalIgnoreCase) >= 0 || d.Name.IndexOf(o.Name, StringComparison.OrdinalIgnoreCase) >= 0);
-                            if (match != null)
+                            if (!d.IsConnected)
                             {
-                                if (Audio.SetDefaultOutput(match.Id)) app.Pill.Flash(Loc.Tr("Ausgabe: ") + match.Name, 2, false);
-                                Build();
+                                app.Pill.Flash(Loc.Tr("Verbinde mit ") + d.Name + "\u2026", 2, false);
+                                BluetoothManager.ConnectDevice(d, success =>
+                                {
+                                    app.Pill.Flash(d.Name + ": " + (success ? Loc.Tr("Verbunden") : Loc.Tr("Nicht verbunden")), 2, false);
+                                    Build();
+                                    if (refreshParent != null) refreshParent();
+                                });
                             }
                             else
                             {
-                                app.Pill.Flash(d.Name + ": " + (d.IsConnected ? Loc.Tr("Verbunden") : Loc.Tr("Gekoppelt")), 2, false);
+                                var outputs = Audio.Outputs();
+                                var match = outputs.FirstOrDefault(o => o.Name.IndexOf(d.Name, StringComparison.OrdinalIgnoreCase) >= 0 || d.Name.IndexOf(o.Name, StringComparison.OrdinalIgnoreCase) >= 0);
+                                if (match != null)
+                                {
+                                    if (Audio.SetDefaultOutput(match.Id)) app.Pill.Flash(Loc.Tr("Ausgabe: ") + match.Name, 2, false);
+                                    Build();
+                                }
                             }
                         };
                         AddRow(g, pick, k => { if (k == 0) pick(); });
